@@ -266,6 +266,18 @@ Report vulnerabilities to **security@infrapilot.org** — do NOT open public iss
 
 See [SECURITY.md](SECURITY.md) for details.
 
+
+## System Requirements
+
+- Docker 24+
+- 2 CPU cores minimum (4 recommended)
+- 4 GB RAM minimum
+- Linux x86_64 / ARM64
+
+All configuration, certificates, logs, and metadata
+are stored in the `/data` volume.
+Back this up regularly.
+
 ## Contributing
 
 We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
@@ -281,5 +293,6 @@ Need multi-node clustering, SSO/SAML, or priority support?
 Contact **enterprise@infrapilot.org**
 
 ---
+InfraPilot is an open-source project stewarded by [DevSimplex](https://devsimplex.com) 
 
-Built by [DevSimplex](https://github.com/devsimplex-org)
+Repository Maintained By [DevSimplex](https://github.com/devsimplex-org)
