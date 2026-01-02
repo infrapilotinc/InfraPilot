@@ -74,11 +74,43 @@ RUN pnpm build
 # -------------------------------------------------------------
 FROM alpine:3.20
 
+
+
+
+
+# -------------------------------------------------------------
+# OCI Image Metadata (Docker Hub / Registry visibility)
+# -------------------------------------------------------------
+
+# Human-readable name of the image
 LABEL org.opencontainers.image.title="InfraPilot"
-LABEL org.opencontainers.image.description="Docker-native infrastructure control plane"
-LABEL org.opencontainers.image.vendor="DevSimplex"
-LABEL org.opencontainers.image.source="https://github.com/devsimplex-org/InfraPilot"
+# Short description shown on Docker Hub search & repo page
+LABEL org.opencontainers.image.description="Open-source control plane for Docker, NGINX, and self-hosted infrastructure"
+# Project homepage (can be same as repo or website)
+LABEL org.opencontainers.image.url="https://infrapilot.org"
+# Source code repository (VERY IMPORTANT)
+LABEL org.opencontainers.image.source="https://github.com/devsimplex-org/infrapilot"
+# Documentation / README link (Docker Hub auto-links this)
+LABEL org.opencontainers.image.documentation="https://github.com/devsimplex-org/infrapilot#readme"
+# License identifier (SPDX format)
 LABEL org.opencontainers.image.licenses="Apache-2.0"
+# Organization / vendor name
+LABEL org.opencontainers.image.vendor="DevSimplex"
+# Author / maintainer (optional but professional)
+LABEL org.opencontainers.image.authors="DevSimplex <hello@devsimplex.com>"
+# Image version (should match git tag or release)
+LABEL org.opencontainers.image.version="0.1.0"
+# Build creation time (auto-filled during build)
+ARG BUILD_DATE
+LABEL org.opencontainers.image.created=$BUILD_DATE
+# Git commit SHA (optional but very useful)
+ARG VCS_REF
+LABEL org.opencontainers.image.revision=$VCS_REF
+
+
+
+
+
 
 # Install runtime dependencies
 RUN apk add --no-cache \

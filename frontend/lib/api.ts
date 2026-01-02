@@ -300,8 +300,30 @@ export interface SystemHealth {
   cpu_cores: number;
 }
 
+// Setup types
+export interface SetupStatusResponse {
+  setup_required: boolean;
+  user_count: number;
+}
+
+export interface SetupResponse {
+  message: string;
+  user_id: string;
+  access_token?: string;
+  refresh_token?: string;
+}
+
 // API methods
 export const api = {
+  // Setup (first-run)
+  getSetupStatus: () => fetchAPI<SetupStatusResponse>("/setup/status"),
+
+  createInitialAdmin: (email: string, password: string) =>
+    fetchAPI<SetupResponse>("/setup", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    }),
+
   // Auth
   login: (email: string, password: string) =>
     fetchAPI<LoginResponse>("/auth/login", {

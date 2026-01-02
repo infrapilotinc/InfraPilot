@@ -29,6 +29,10 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	// API v1 routes
 	v1 := r.Group("/api/v1")
 	{
+		// Setup routes (public - only work when no users exist)
+		v1.GET("/setup/status", h.getSetupStatus)
+		v1.POST("/setup", h.createInitialAdmin)
+
 		// Auth routes (public)
 		authGroup := v1.Group("/auth")
 		{

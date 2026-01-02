@@ -25,6 +25,7 @@ interface AuthState {
   cancelMFA: () => void;
   logout: () => void;
   setUser: (user: User | null) => void;
+  setTokens: (accessToken: string, refreshToken: string) => Promise<void>;
   refreshAccessToken: () => Promise<void>;
 }
 
@@ -117,6 +118,21 @@ export const useAuthStore = create<AuthState>()(
       },
 
       setUser: (user) => set({ user }),
+
+      setTokens: async (accessToken: string, refreshToken: string) => {
+        localStorage.setItem("access_token", accessToken);
+        setCookie("access_token", accessToken);
+        set({
+          accessToken,
+          refreshToken,
+          mfaToken: null,
+          mfaRequired: false,
+        });
+
+        // Fetch user info
+        const user = await api.getCurrentUser();
+        set({ user });
+      },
 
       refreshAccessToken: async () => {
         const { refreshToken } = get();

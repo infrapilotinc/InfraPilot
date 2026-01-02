@@ -1,8 +1,9 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthStore } from "@/lib/auth";
+import { api } from "@/lib/api";
 
 function MFAForm({ onCancel }: { onCancel: () => void }) {
   const router = useRouter();
@@ -98,6 +99,25 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [checkingSetup, setCheckingSetup] = useState(true);
+
+  // Check if setup is required on mount
+  useEffect(() => {
+    const checkSetup = async () => {
+      try {
+        const status = await api.getSetupStatus();
+        if (status.setup_required) {
+          router.replace("/setup");
+          return;
+        }
+      } catch {
+        // If setup check fails, allow login attempt
+      } finally {
+        setCheckingSetup(false);
+      }
+    };
+    checkSetup();
+  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -119,6 +139,15 @@ function LoginForm() {
     }
   };
 
+  if (checkingSetup) {
+    return (
+      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl p-8 text-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500 mx-auto" />
+        <p className="mt-4 text-gray-600 dark:text-gray-400">Loading...</p>
+      </div>
+    );
+  }
+
   if (mfaRequired) {
     return <MFAForm onCancel={cancelMFA} />;
   }
@@ -126,6 +155,7 @@ function LoginForm() {
   return (
     <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl p-8">
       <div className="text-center mb-8">
+        <img src="/logo.svg" alt="InfraPilot" className="h-12 w-12 mx-auto mb-4" />
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">InfraPilot</h1>
         <p className="text-gray-600 dark:text-gray-400 mt-2">Sign in to your account</p>
       </div>
