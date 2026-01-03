@@ -78,10 +78,7 @@ case "$1" in
     cd "$PROJECT_ROOT"
     $COMPOSE -f docker-compose.dev.yml exec -T postgres psql -U infrapilot -d infrapilot < scripts/seed.sql
     echo ""
-    echo "Test users created:"
-    echo "  admin@infrapilot.local / admin123 (super_admin)"
-    echo "  operator@infrapilot.local / admin123 (operator)"
-    echo "  viewer@infrapilot.local / admin123 (viewer)"
+    echo "Seed data applied. Create admin account via setup flow at http://localhost"
     ;;
 
   "air")
@@ -103,7 +100,7 @@ case "$1" in
     echo "  logs    View service logs (e.g., logs backend)"
     echo "  proto   Generate protobuf code"
     echo "  migrate Run database migrations"
-    echo "  seed    Create test users and data"
+    echo "  seed    Apply seed data (org, agent - no users)"
     echo "  air     Install Air for hot reload"
     echo ""
     echo "Quick Start (Docker):"
