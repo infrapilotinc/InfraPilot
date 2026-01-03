@@ -826,7 +826,7 @@ export default function ProxiesPage() {
           }}
           title={selectedProxy?.domain}
           subtitle={selectedProxy?.upstream_target}
-          width="lg"
+          defaultWidth={520}
         >
           {selectedProxy && (
             <div className="space-y-4">

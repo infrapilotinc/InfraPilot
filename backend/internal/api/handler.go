@@ -74,6 +74,10 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				agents.GET("/:id/proxies/:pid/security-headers", h.getSecurityHeaders)
 				agents.PUT("/:id/proxies/:pid/security-headers", h.RequireModifyProxy(), h.updateSecurityHeaders)
 
+				// Nginx management
+				agents.POST("/:id/nginx/test", h.RequireModifyProxy(), h.testNginxConfig)
+				agents.POST("/:id/nginx/reload", h.RequireModifyProxy(), h.reloadNginx)
+
 				// Rate limits
 				agents.GET("/:id/proxies/:pid/rate-limits", h.listRateLimits)
 				agents.POST("/:id/proxies/:pid/rate-limits", h.RequireModifyProxy(), h.createRateLimit)
@@ -144,6 +148,16 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				users.POST("", h.createUserReal)
 				users.PUT("/:id", h.updateUserReal)
 				users.DELETE("/:id", h.deleteUserReal)
+			}
+
+			// System Settings (super_admin only)
+			settings := protected.Group("/settings")
+			settings.Use(h.RequireRole(auth.RoleSuperAdmin))
+			{
+				settings.GET("", h.getSystemSettings)
+				settings.GET("/domain", h.getInfraPilotDomain)
+				settings.PUT("/domain", h.updateInfraPilotDomain)
+				settings.DELETE("/domain", h.deleteInfraPilotDomain)
 			}
 		}
 	}

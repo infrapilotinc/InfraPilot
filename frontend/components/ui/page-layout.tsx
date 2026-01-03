@@ -20,16 +20,16 @@ export function PageLayout({
   panelOpen = false,
 }: PageLayoutProps) {
   return (
-    <div className="flex h-full -m-4 lg:-m-8">
+    <div className="flex h-full max-h-full overflow-hidden -m-4 lg:-m-8">
       {/* Main content area */}
       <div
         className={cn(
-          "flex-1 flex flex-col min-w-0 transition-all duration-300",
+          "flex-1 flex flex-col min-w-0 min-h-0 transition-all duration-300",
           panelOpen && panel ? "lg:mr-0" : ""
         )}
       >
         {/* Page header */}
-        <div className="flex items-center justify-between p-4 lg:p-6 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
+        <div className="flex items-center justify-between p-4 lg:p-6 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 flex-shrink-0">
           <div>
             <h1 className="text-xl font-semibold text-gray-900 dark:text-white">
               {title}
@@ -44,7 +44,7 @@ export function PageLayout({
         </div>
 
         {/* Scrollable content */}
-        <div className="flex-1 overflow-auto p-4 lg:p-6">{children}</div>
+        <div className="flex-1 overflow-auto p-4 lg:p-6 min-h-0">{children}</div>
       </div>
 
       {/* Detail panel */}

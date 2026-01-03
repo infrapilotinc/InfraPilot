@@ -887,6 +887,126 @@ func generateLocationBlock(upstream string) string {
 `, upstream)
 }
 
+// ============ Nginx Management ============
+
+// testNginxConfig tests the entire nginx configuration
+func (h *Handler) testNginxConfig(c *gin.Context) {
+	orgID := c.MustGet("org_id").(uuid.UUID)
+	agentIDStr := c.Param("id")
+
+	agentID, err := uuid.Parse(agentIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid agent ID"})
+		return
+	}
+
+	// Verify agent belongs to org
+	var exists bool
+	err = h.db.QueryRow(c.Request.Context(), `
+		SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1 AND org_id = $2)
+	`, agentID, orgID).Scan(&exists)
+
+	if err != nil || !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		return
+	}
+
+	// Check agent connection
+	if !agentgrpc.IsAgentConnected(agentIDStr) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"success": false,
+			"message": "Agent not connected",
+		})
+		return
+	}
+
+	// Send test command
+	cmd := agentgrpc.NewNginxTestConfigCommand()
+	resp, err := agentgrpc.SendCommand(agentIDStr, cmd, 30*time.Second)
+	if err != nil {
+		h.logger.Error("Failed to send nginx test command", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("Failed to test config: %v", err),
+		})
+		return
+	}
+
+	if result, ok := resp.Response.(*agentgrpc.CommandResult); ok {
+		c.JSON(http.StatusOK, gin.H{
+			"success": result.Success,
+			"message": result.Message,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Configuration test completed",
+	})
+}
+
+// reloadNginx reloads the nginx configuration
+func (h *Handler) reloadNginx(c *gin.Context) {
+	orgID := c.MustGet("org_id").(uuid.UUID)
+	userID := c.MustGet("user_id").(uuid.UUID)
+	agentIDStr := c.Param("id")
+
+	agentID, err := uuid.Parse(agentIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid agent ID"})
+		return
+	}
+
+	// Verify agent belongs to org
+	var exists bool
+	err = h.db.QueryRow(c.Request.Context(), `
+		SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1 AND org_id = $2)
+	`, agentID, orgID).Scan(&exists)
+
+	if err != nil || !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		return
+	}
+
+	// Check agent connection
+	if !agentgrpc.IsAgentConnected(agentIDStr) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"success": false,
+			"message": "Agent not connected",
+		})
+		return
+	}
+
+	// Send reload command
+	cmd := agentgrpc.NewNginxReloadCommand()
+	resp, err := agentgrpc.SendCommand(agentIDStr, cmd, 30*time.Second)
+	if err != nil {
+		h.logger.Error("Failed to send nginx reload command", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": fmt.Sprintf("Failed to reload nginx: %v", err),
+		})
+		return
+	}
+
+	// Audit log
+	h.auditLog(c, userID, orgID, "nginx.reload", "agent", agentID, nil)
+
+	if result, ok := resp.Response.(*agentgrpc.CommandResult); ok {
+		c.JSON(http.StatusOK, gin.H{
+			"success": result.Success,
+			"message": result.Message,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Nginx reloaded successfully",
+	})
+}
+
 // ============ gRPC Dispatch Functions ============
 
 // dispatchProxyConfig sends nginx config to the agent

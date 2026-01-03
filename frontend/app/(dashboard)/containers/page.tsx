@@ -246,36 +246,103 @@ export default function ContainersPage() {
 
     switch (panelTab) {
       case "logs":
+        const parseLogLine = (line: string) => {
+          // Try to parse timestamp at the beginning
+          const timestampMatch = line.match(/^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s*/);
+          let timestamp = "";
+          let message = line;
+
+          if (timestampMatch) {
+            timestamp = timestampMatch[1];
+            message = line.slice(timestampMatch[0].length);
+          }
+
+          // Detect log level/type
+          const lowerMessage = message.toLowerCase();
+          let level: "error" | "warn" | "info" | "debug" = "info";
+          if (lowerMessage.includes("error") || lowerMessage.includes("err ") || lowerMessage.includes("fatal") || lowerMessage.includes("panic")) {
+            level = "error";
+          } else if (lowerMessage.includes("warn") || lowerMessage.includes("warning")) {
+            level = "warn";
+          } else if (lowerMessage.includes("debug") || lowerMessage.includes("trace")) {
+            level = "debug";
+          }
+
+          return { timestamp, message, level };
+        };
+
+        const logLines = logsData?.logs?.split("\n").filter((l: string) => l.trim()) || [];
+
+        const getLevelColor = (level: string) => {
+          switch (level) {
+            case "error": return "text-red-400";
+            case "warn": return "text-yellow-400";
+            case "debug": return "text-gray-500";
+            default: return "text-gray-300";
+          }
+        };
+
+        const getLevelBg = (level: string) => {
+          switch (level) {
+            case "error": return "bg-red-500/10 border-l-2 border-red-500";
+            case "warn": return "bg-yellow-500/10 border-l-2 border-yellow-500";
+            default: return "";
+          }
+        };
+
         return (
-          <div className="h-full flex flex-col">
-            <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col -mx-4 -mt-4 h-[calc(100vh-200px)] max-h-[600px]">
+            <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700 flex-shrink-0">
               <select
                 value={logsTail}
                 onChange={(e) => setLogsTail(Number(e.target.value))}
-                className="px-3 py-1.5 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white"
+                className="px-2 py-1 bg-gray-700 border border-gray-600 rounded text-xs text-gray-200"
               >
-                <option value={50}>Last 50 lines</option>
-                <option value={100}>Last 100 lines</option>
-                <option value={500}>Last 500 lines</option>
-                <option value={1000}>Last 1000 lines</option>
+                <option value={50}>50 lines</option>
+                <option value={100}>100 lines</option>
+                <option value={500}>500 lines</option>
+                <option value={1000}>1000 lines</option>
               </select>
-              <button
-                onClick={() => refetchLogs()}
-                className="p-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors"
-                title="Refresh logs"
-              >
-                <RefreshCw className={cn("h-4 w-4 text-gray-600 dark:text-gray-400", logsLoading && "animate-spin")} />
-              </button>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">{logLines.length} lines</span>
+                <button
+                  onClick={() => refetchLogs()}
+                  className="p-1.5 hover:bg-gray-700 rounded transition-colors"
+                  title="Refresh logs"
+                >
+                  <RefreshCw className={cn("h-3.5 w-3.5 text-gray-400", logsLoading && "animate-spin")} />
+                </button>
+              </div>
             </div>
-            <div className="flex-1 bg-gray-900 rounded-lg p-4 overflow-auto">
+            <div className="flex-1 bg-gray-900 overflow-y-auto min-h-0">
               {logsLoading ? (
                 <div className="flex items-center justify-center h-32">
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-500" />
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary-500" />
                 </div>
-              ) : logsData?.logs ? (
-                <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all leading-relaxed">
-                  {logsData.logs}
-                </pre>
+              ) : logLines.length > 0 ? (
+                <div className="font-mono text-xs">
+                  {logLines.map((line: string, idx: number) => {
+                    const { timestamp, message, level } = parseLogLine(line);
+                    return (
+                      <div
+                        key={idx}
+                        className={cn(
+                          "flex gap-2 px-3 py-0.5 hover:bg-gray-800/50",
+                          getLevelBg(level)
+                        )}
+                      >
+                        {timestamp && (
+                          <span className="text-gray-600 flex-shrink-0 w-20 truncate" title={timestamp}>
+                            {new Date(timestamp).toLocaleTimeString()}
+                          </span>
+                        )}
+                        <span className={cn("break-all", getLevelColor(level))}>
+                          {message}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               ) : (
                 <div className="text-center text-gray-500 py-8 text-sm">
                   No logs available
@@ -464,7 +531,7 @@ export default function ContainersPage() {
           onClose={() => setSelectedContainer(null)}
           title={selectedContainer?.name}
           subtitle={selectedContainer?.image}
-          width="lg"
+          defaultWidth={520}
         >
           {selectedContainer && (
             <div className="space-y-4">

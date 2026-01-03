@@ -313,6 +313,16 @@ export interface SetupResponse {
   refresh_token?: string;
 }
 
+// System Settings types
+export interface InfraPilotDomainSettings {
+  domain: string;
+  ssl_enabled: boolean;
+  force_ssl: boolean;
+  http2_enabled: boolean;
+  proxy_host_id?: string;
+  status?: string;
+}
+
 // API methods
 export const api = {
   // Setup (first-run)
@@ -699,5 +709,39 @@ export const api = {
     fetchAPI<MFAConfirmResponse>("/auth/mfa/backup-codes", {
       method: "POST",
       body: JSON.stringify({ code }),
+    }),
+
+  // System Settings
+  getSystemSettings: () =>
+    fetchAPI<Record<string, unknown>>("/settings"),
+
+  getInfraPilotDomain: () =>
+    fetchAPI<InfraPilotDomainSettings>("/settings/domain"),
+
+  updateInfraPilotDomain: (data: {
+    domain: string;
+    ssl_enabled?: boolean;
+    force_ssl?: boolean;
+    http2_enabled?: boolean;
+  }) =>
+    fetchAPI<InfraPilotDomainSettings>("/settings/domain", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  deleteInfraPilotDomain: () =>
+    fetchAPI<{ message: string }>("/settings/domain", {
+      method: "DELETE",
+    }),
+
+  // Nginx Management
+  testNginxConfig: (agentId: string) =>
+    fetchAPI<{ success: boolean; message: string }>(`/agents/${agentId}/nginx/test`, {
+      method: "POST",
+    }),
+
+  reloadNginx: (agentId: string) =>
+    fetchAPI<{ success: boolean; message: string }>(`/agents/${agentId}/nginx/reload`, {
+      method: "POST",
     }),
 };

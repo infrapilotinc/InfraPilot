@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Settings,
@@ -14,8 +14,13 @@ import {
   Copy,
   Key,
   X,
+  Globe,
+  Lock,
+  Trash2,
+  Loader2,
+  RefreshCw,
 } from "lucide-react";
-import { api, Agent, User, MFASetupResponse } from "@/lib/api";
+import { api, Agent, User, MFASetupResponse, InfraPilotDomainSettings } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/lib/auth";
 
@@ -27,6 +32,485 @@ interface ProxySettings {
   nginx_container_name?: string;
   external_proxy_type?: string;
   external_proxy_notes?: string;
+}
+
+// InfraPilot Domain Section
+function InfraPilotDomainSection() {
+  const queryClient = useQueryClient();
+  const [domain, setDomain] = useState("");
+  const [sslEnabled, setSSLEnabled] = useState(true);
+  const [forceSSL, setForceSSL] = useState(true);
+  const [http2Enabled, setHTTP2Enabled] = useState(true);
+  const [hasChanges, setHasChanges] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+
+  // Fetch current domain settings
+  const { data: domainSettings, isLoading } = useQuery({
+    queryKey: ["infrapilotDomain"],
+    queryFn: () => api.getInfraPilotDomain(),
+  });
+
+  // Update form when data loads
+  useEffect(() => {
+    if (domainSettings?.domain) {
+      setDomain(domainSettings.domain);
+      setSSLEnabled(domainSettings.ssl_enabled);
+      setForceSSL(domainSettings.force_ssl);
+      setHTTP2Enabled(domainSettings.http2_enabled);
+    }
+  }, [domainSettings]);
+
+  // Save mutation
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      api.updateInfraPilotDomain({
+        domain,
+        ssl_enabled: sslEnabled,
+        force_ssl: forceSSL,
+        http2_enabled: http2Enabled,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["infrapilotDomain"] });
+      setHasChanges(false);
+    },
+  });
+
+  // Delete mutation
+  const deleteMutation = useMutation({
+    mutationFn: () => api.deleteInfraPilotDomain(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["infrapilotDomain"] });
+      setDomain("");
+      setSSLEnabled(true);
+      setForceSSL(true);
+      setHTTP2Enabled(true);
+      setShowDelete(false);
+      setHasChanges(false);
+    },
+  });
+
+  const handleDomainChange = (value: string) => {
+    setDomain(value);
+    setHasChanges(true);
+  };
+
+  const isConfigured = domainSettings?.domain && domainSettings.domain.length > 0;
+
+  return (
+    <section className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
+      <div className="flex items-center gap-3 mb-6">
+        <div className="p-2 bg-blue-500/10 rounded-lg">
+          <Globe className="h-5 w-5 text-blue-400" />
+        </div>
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">InfraPilot Domain</h2>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Configure a custom domain to access InfraPilot
+          </p>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-6 w-6 text-gray-400 animate-spin" />
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* Current status */}
+          {isConfigured && (
+            <div className="flex items-center justify-between p-4 bg-green-500/5 border border-green-500/20 rounded-lg">
+              <div className="flex items-center gap-3">
+                <div className="w-2 h-2 rounded-full bg-green-500" />
+                <div>
+                  <p className="font-medium text-gray-900 dark:text-white">
+                    {domainSettings.domain}
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    {domainSettings.ssl_enabled ? "HTTPS enabled" : "HTTP only"}
+                  </p>
+                </div>
+              </div>
+              <span className="px-2 py-1 text-xs bg-green-500/10 text-green-400 border border-green-500/30 rounded">
+                Active
+              </span>
+            </div>
+          )}
+
+          {/* Domain input */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Domain Name
+            </label>
+            <input
+              type="text"
+              value={domain}
+              onChange={(e) => handleDomainChange(e.target.value)}
+              placeholder="infrapilot.example.com"
+              className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+            />
+            <p className="mt-1.5 text-xs text-gray-500">
+              Make sure DNS is pointed to this server before enabling SSL
+            </p>
+          </div>
+
+          {/* SSL Options */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Lock className="h-4 w-4 text-gray-500" />
+                <div>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">Enable SSL/HTTPS</p>
+                  <p className="text-xs text-gray-500">Automatically provision Let's Encrypt certificate</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSSLEnabled(!sslEnabled);
+                  setHasChanges(true);
+                }}
+                className={cn(
+                  "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+                  sslEnabled ? "bg-primary-600" : "bg-gray-300 dark:bg-gray-700"
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                    sslEnabled ? "translate-x-6" : "translate-x-1"
+                  )}
+                />
+              </button>
+            </div>
+
+            {sslEnabled && (
+              <>
+                <div className="flex items-center justify-between pl-7">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">Force HTTPS</p>
+                    <p className="text-xs text-gray-500">Redirect all HTTP requests to HTTPS</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForceSSL(!forceSSL);
+                      setHasChanges(true);
+                    }}
+                    className={cn(
+                      "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+                      forceSSL ? "bg-primary-600" : "bg-gray-300 dark:bg-gray-700"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                        forceSSL ? "translate-x-6" : "translate-x-1"
+                      )}
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pl-7">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">HTTP/2</p>
+                    <p className="text-xs text-gray-500">Enable HTTP/2 protocol for better performance</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHTTP2Enabled(!http2Enabled);
+                      setHasChanges(true);
+                    }}
+                    className={cn(
+                      "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+                      http2Enabled ? "bg-primary-600" : "bg-gray-300 dark:bg-gray-700"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                        http2Enabled ? "translate-x-6" : "translate-x-1"
+                      )}
+                    />
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Error display */}
+          {(saveMutation.isError || deleteMutation.isError) && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              {saveMutation.error?.message || deleteMutation.error?.message || "An error occurred"}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex items-center justify-between pt-2">
+            {isConfigured && !showDelete ? (
+              <button
+                onClick={() => setShowDelete(true)}
+                className="text-sm text-red-400 hover:text-red-300 flex items-center gap-1.5"
+              >
+                <Trash2 className="h-4 w-4" />
+                Remove Domain
+              </button>
+            ) : showDelete ? (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-500">Are you sure?</span>
+                <button
+                  onClick={() => deleteMutation.mutate()}
+                  disabled={deleteMutation.isPending}
+                  className="px-3 py-1.5 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg"
+                >
+                  {deleteMutation.isPending ? "Removing..." : "Yes, Remove"}
+                </button>
+                <button
+                  onClick={() => setShowDelete(false)}
+                  className="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-300"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div />
+            )}
+
+            {hasChanges && domain && (
+              <button
+                onClick={() => saveMutation.mutate()}
+                disabled={saveMutation.isPending || !domain}
+                className="px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-400 text-white rounded-lg transition-colors flex items-center gap-2"
+              >
+                {saveMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Check className="h-4 w-4" />
+                )}
+                {saveMutation.isPending ? "Saving..." : "Save Domain"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// Nginx Configuration Section
+function NginxConfigSection({ agentId }: { agentId: string | null }) {
+  const [selectedProxy, setSelectedProxy] = useState<string | null>(null);
+  const [configContent, setConfigContent] = useState<string>("");
+  const [copied, setCopied] = useState(false);
+
+  // Fetch proxies for this agent
+  const { data: proxies, isLoading: proxiesLoading } = useQuery({
+    queryKey: ["proxies", agentId],
+    queryFn: () => (agentId ? api.getProxyHosts(agentId) : Promise.resolve([])),
+    enabled: !!agentId,
+  });
+
+  // Fetch config for selected proxy
+  const { data: proxyConfig, isLoading: configLoading } = useQuery({
+    queryKey: ["proxyConfig", agentId, selectedProxy],
+    queryFn: () =>
+      agentId && selectedProxy
+        ? api.getProxyConfig(agentId, selectedProxy)
+        : Promise.resolve(null),
+    enabled: !!agentId && !!selectedProxy,
+  });
+
+  useEffect(() => {
+    if (proxyConfig?.config) {
+      setConfigContent(proxyConfig.config);
+    }
+  }, [proxyConfig]);
+
+  // Test nginx config
+  const testMutation = useMutation({
+    mutationFn: () => (agentId ? api.testNginxConfig(agentId) : Promise.reject("No agent")),
+  });
+
+  // Reload nginx
+  const reloadMutation = useMutation({
+    mutationFn: () => (agentId ? api.reloadNginx(agentId) : Promise.reject("No agent")),
+  });
+
+  const handleCopyConfig = () => {
+    navigator.clipboard.writeText(configContent);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (!agentId) {
+    return null;
+  }
+
+  return (
+    <section className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-orange-500/10 rounded-lg">
+            <Settings className="h-5 w-5 text-orange-400" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Nginx Configuration</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              View and manage proxy configurations
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => testMutation.mutate()}
+            disabled={testMutation.isPending}
+            className={cn(
+              "px-3 py-1.5 text-sm rounded-lg transition-colors flex items-center gap-1.5",
+              testMutation.isSuccess && testMutation.data?.success
+                ? "bg-green-500/10 text-green-400 border border-green-500/30"
+                : testMutation.isError || (testMutation.isSuccess && !testMutation.data?.success)
+                ? "bg-red-500/10 text-red-400 border border-red-500/30"
+                : "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
+            )}
+          >
+            {testMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : testMutation.isSuccess && testMutation.data?.success ? (
+              <Check className="h-4 w-4" />
+            ) : (
+              <AlertTriangle className="h-4 w-4" />
+            )}
+            {testMutation.isPending ? "Testing..." : "Test Config"}
+          </button>
+          <button
+            onClick={() => reloadMutation.mutate()}
+            disabled={reloadMutation.isPending}
+            className={cn(
+              "px-3 py-1.5 text-sm rounded-lg transition-colors flex items-center gap-1.5",
+              reloadMutation.isSuccess && reloadMutation.data?.success
+                ? "bg-green-500/10 text-green-400 border border-green-500/30"
+                : reloadMutation.isError
+                ? "bg-red-500/10 text-red-400 border border-red-500/30"
+                : "bg-primary-600 hover:bg-primary-700 text-white"
+            )}
+          >
+            {reloadMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            {reloadMutation.isPending ? "Reloading..." : "Reload Nginx"}
+          </button>
+        </div>
+      </div>
+
+      {/* Status messages */}
+      {(testMutation.isSuccess || reloadMutation.isSuccess) && (
+        <div
+          className={cn(
+            "mb-4 p-3 rounded-lg text-sm",
+            (testMutation.data?.success || reloadMutation.data?.success)
+              ? "bg-green-500/10 border border-green-500/30 text-green-400"
+              : "bg-red-500/10 border border-red-500/30 text-red-400"
+          )}
+        >
+          {testMutation.data?.message || reloadMutation.data?.message}
+        </div>
+      )}
+
+      {/* Proxy list */}
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            Proxy Hosts ({proxies?.length || 0})
+          </label>
+          {proxiesLoading ? (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
+            </div>
+          ) : proxies && proxies.length > 0 ? (
+            <div className="space-y-2">
+              {proxies.map((proxy) => (
+                <div
+                  key={proxy.id}
+                  onClick={() => setSelectedProxy(proxy.id === selectedProxy ? null : proxy.id)}
+                  className={cn(
+                    "p-3 rounded-lg border cursor-pointer transition-colors",
+                    selectedProxy === proxy.id
+                      ? "border-primary-500 bg-primary-500/5"
+                      : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={cn(
+                          "w-2 h-2 rounded-full",
+                          proxy.status === "active" ? "bg-green-500" : "bg-yellow-500"
+                        )}
+                      />
+                      <div>
+                        <p className="font-medium text-gray-900 dark:text-white">{proxy.domain}</p>
+                        <p className="text-xs text-gray-500">{proxy.upstream_target}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {proxy.ssl_enabled && (
+                        <span className="px-2 py-0.5 text-xs bg-green-500/10 text-green-400 border border-green-500/30 rounded">
+                          SSL
+                        </span>
+                      )}
+                      <span
+                        className={cn(
+                          "px-2 py-0.5 text-xs rounded",
+                          proxy.status === "active"
+                            ? "bg-green-500/10 text-green-400"
+                            : "bg-yellow-500/10 text-yellow-400"
+                        )}
+                      >
+                        {proxy.status}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500 py-4 text-center">
+              No proxy hosts configured. Add proxies from the Proxies page.
+            </p>
+          )}
+        </div>
+
+        {/* Config viewer */}
+        {selectedProxy && (
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Generated Nginx Config
+              </label>
+              <button
+                onClick={handleCopyConfig}
+                className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1"
+              >
+                <Copy className="h-3 w-3" />
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </div>
+            {configLoading ? (
+              <div className="flex items-center justify-center py-8 bg-gray-900 rounded-lg">
+                <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
+              </div>
+            ) : (
+              <pre className="p-4 bg-gray-900 rounded-lg overflow-x-auto text-xs text-gray-300 font-mono max-h-80 overflow-y-auto">
+                {configContent || "No config available"}
+              </pre>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
+  );
 }
 
 // MFA Setup Component
@@ -400,6 +884,11 @@ export default function SettingsPage() {
         </p>
       </div>
 
+      {/* InfraPilot Domain Section */}
+      <div className="mb-8">
+        <InfraPilotDomainSection />
+      </div>
+
       {/* Security Section - MFA */}
       <div className="mb-8">
         <MFASection />
@@ -611,6 +1100,9 @@ export default function SettingsPage() {
               </div>
             </div>
           </section>
+
+          {/* Nginx Configuration Section */}
+          <NginxConfigSection agentId={selectedAgent} />
         </div>
       )}
 

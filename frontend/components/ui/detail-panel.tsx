@@ -90,8 +90,8 @@ export function DetailPanel({
         ref={panelRef}
         style={{ width: open ? width : 0 }}
         className={cn(
-          "fixed lg:relative right-0 top-0 lg:top-auto h-full bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 z-50 lg:z-auto",
-          "flex flex-col",
+          "fixed lg:relative right-0 top-0 lg:top-auto h-full max-h-full bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 z-50 lg:z-auto",
+          "flex flex-col min-h-0 overflow-hidden",
           "transition-[transform,opacity] duration-300 ease-in-out",
           open ? "translate-x-0 opacity-100" : "translate-x-full lg:translate-x-0 opacity-0 lg:w-0 lg:overflow-hidden"
         )}
@@ -141,7 +141,7 @@ export function DetailPanel({
         )}
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4 animate-fade-in">
+        <div className="flex-1 overflow-y-auto p-4 animate-fade-in min-h-0">
           {children}
         </div>
 
