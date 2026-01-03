@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   Server,
@@ -17,7 +17,7 @@ import {
   X,
   Activity,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuthStore } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -41,8 +41,28 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const { user, logout } = useAuthStore();
+  const router = useRouter();
+  const { user, logout, accessToken } = useAuthStore();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isChecking, setIsChecking] = useState(true);
+
+  useEffect(() => {
+    // Check for token in localStorage (persisted from login)
+    const token = localStorage.getItem("access_token");
+    if (!token && !accessToken) {
+      router.replace("/login");
+    } else {
+      setIsChecking(false);
+    }
+  }, [accessToken, router]);
+
+  if (isChecking) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-100 dark:bg-gray-950">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-gray-100 dark:bg-gray-950">

@@ -23,7 +23,7 @@ services:
       - "${HTTPS_PORT:-443}:443"
     environment:
       # Required
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required - generate with: openssl rand -base64 32}
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required - generate with: openssl rand -base64 32}"
 
       # Optional - Database (uses embedded PostgreSQL if not set)
       DATABASE_URL: ${DATABASE_URL:-}
