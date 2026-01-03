@@ -47,13 +47,38 @@ export default function DashboardLayout({
   const [isChecking, setIsChecking] = useState(true);
 
   useEffect(() => {
-    // Check for token in localStorage (persisted from login)
-    const token = localStorage.getItem("access_token");
-    if (!token && !accessToken) {
-      router.replace("/login");
-    } else {
-      setIsChecking(false);
-    }
+    const validateAuth = async () => {
+      // Check for token in localStorage
+      const token = localStorage.getItem("access_token");
+      if (!token && !accessToken) {
+        router.replace("/login");
+        return;
+      }
+
+      // Validate token with backend
+      try {
+        const response = await fetch("/api/v1/auth/me", {
+          headers: {
+            Authorization: `Bearer ${token || accessToken}`,
+          },
+        });
+
+        if (!response.ok) {
+          // Token is invalid - clear it and redirect to login
+          localStorage.removeItem("access_token");
+          router.replace("/login");
+          return;
+        }
+
+        setIsChecking(false);
+      } catch {
+        // Network error or backend down - redirect to login
+        localStorage.removeItem("access_token");
+        router.replace("/login");
+      }
+    };
+
+    validateAuth();
   }, [accessToken, router]);
 
   if (isChecking) {
