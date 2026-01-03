@@ -67,9 +67,11 @@ export function Terminal({ containerId, agentId, onClose }: TerminalProps) {
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     // Use current window location for WebSocket
     const wsHost = process.env.NEXT_PUBLIC_WS_URL || `${wsProtocol}//${window.location.host}`;
-    const wsUrl = `${wsHost}/api/v1/agents/${agentId}/containers/${containerId}/exec`;
+    // Get token from localStorage for WebSocket auth
+    const token = localStorage.getItem("access_token");
+    const wsUrl = `${wsHost}/api/v1/agents/${agentId}/containers/${containerId}/exec${token ? `?token=${encodeURIComponent(token)}` : ""}`;
 
-    term.writeln(`\x1b[90mConnecting to ${wsUrl}...\x1b[0m`);
+    term.writeln(`\x1b[90mConnecting...\x1b[0m`);
 
     try {
       const ws = new WebSocket(wsUrl);
@@ -89,11 +91,9 @@ export function Terminal({ containerId, agentId, onClose }: TerminalProps) {
 
       ws.onerror = () => {
         setError("WebSocket connection failed");
-        term.writeln("\x1b[31mConnection error. WebSocket exec not yet implemented.\x1b[0m");
-        term.writeln("\x1b[90mThis feature requires the backend WebSocket endpoint.\x1b[0m");
+        term.writeln("\x1b[31mConnection error.\x1b[0m");
+        term.writeln("\x1b[90mCheck that the container is running and accessible.\x1b[0m");
         term.writeln("");
-        term.writeln("\x1b[33mDemo mode: Type commands to see terminal interaction.\x1b[0m");
-        term.write("$ ");
       };
 
       ws.onclose = () => {
@@ -106,17 +106,6 @@ export function Terminal({ containerId, agentId, onClose }: TerminalProps) {
       term.onData((data) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(data);
-        } else {
-          // Demo mode - echo input
-          if (data === "\r") {
-            term.writeln("");
-            term.write("$ ");
-          } else if (data === "\x7f") {
-            // Backspace
-            term.write("\b \b");
-          } else {
-            term.write(data);
-          }
         }
       });
     } catch (err) {
@@ -175,7 +164,7 @@ export function Terminal({ containerId, agentId, onClose }: TerminalProps) {
       />
       {error && (
         <div className="px-4 py-2 bg-yellow-500/10 border-t border-yellow-500/30 text-yellow-400 text-xs">
-          {error} - WebSocket exec endpoint not implemented yet
+          {error}
         </div>
       )}
     </div>

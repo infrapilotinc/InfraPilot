@@ -2,14 +2,16 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 // Routes that don't require authentication
-const publicRoutes = ["/login", "/mfa"];
+const publicRoutes = ["/login", "/setup"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Allow public routes
   if (publicRoutes.some((route) => pathname.startsWith(route))) {
-    return NextResponse.next();
+    const response = NextResponse.next();
+    addSecurityHeaders(response);
+    return response;
   }
 
   // Check for auth token in cookies
@@ -22,7 +24,17 @@ export function proxy(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  return NextResponse.next();
+  const response = NextResponse.next();
+  addSecurityHeaders(response);
+  return response;
+}
+
+// Add security headers to block search engines and improve security
+function addSecurityHeaders(response: NextResponse) {
+  response.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
+  response.headers.set("X-Content-Type-Options", "nosniff");
+  response.headers.set("X-Frame-Options", "DENY");
+  response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
 }
 
 export const config = {
@@ -35,6 +47,6 @@ export const config = {
      * - favicon.ico
      * - public files
      */
-    "/((?!api|_next/static|_next/image|favicon.ico|.*\\..*|health).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|robots.txt|logo.svg|.*\\.png$|.*\\.ico$).*)",
   ],
 };

@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
-  Server,
   Container,
   Globe,
   FileText,
@@ -24,7 +23,6 @@ import { ThemeToggle } from "@/components/theme-toggle";
 
 const navigation = [
   { name: "Overview", href: "/", icon: LayoutDashboard },
-  { name: "Agents", href: "/agents", icon: Server },
   { name: "Containers", href: "/containers", icon: Container },
   { name: "Proxies", href: "/proxies", icon: Globe },
   { name: "Logs", href: "/logs", icon: FileText },

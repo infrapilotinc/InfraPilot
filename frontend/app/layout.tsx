@@ -5,6 +5,18 @@ import { Providers } from "./providers";
 export const metadata: Metadata = {
   title: "InfraPilot",
   description: "Docker-native infrastructure control plane",
+  robots: {
+    index: false,
+    follow: false,
+    googleBot: {
+      index: false,
+      follow: false,
+      noimageindex: true,
+    },
+  },
+  other: {
+    "X-Robots-Tag": "noindex, nofollow, noarchive, nosnippet",
+  },
 };
 
 export default function RootLayout({

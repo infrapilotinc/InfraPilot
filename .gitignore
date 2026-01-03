@@ -46,3 +46,5 @@ redis_data/
 *.crt
 agent/tmp
 backend/tmp
+
+docsx

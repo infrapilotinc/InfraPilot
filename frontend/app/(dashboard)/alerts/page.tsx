@@ -22,6 +22,13 @@ import {
 } from "lucide-react";
 import { api, AlertChannel, AlertRule, AlertHistoryEntry } from "@/lib/api";
 import { formatRelativeTime, cn } from "@/lib/utils";
+import {
+  PageLayout,
+  Button,
+  Tabs,
+  Input,
+  EmptyState,
+} from "@/components/ui/page-layout";
 
 type Tab = "channels" | "rules" | "history";
 
@@ -329,13 +336,13 @@ export default function AlertsPage() {
   const getSeverityColor = (severity: string) => {
     switch (severity) {
       case "critical":
-        return "bg-red-500/10 text-red-400 border-red-500/30";
+        return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800";
       case "warning":
-        return "bg-yellow-500/10 text-yellow-400 border-yellow-500/30";
+        return "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800";
       case "info":
-        return "bg-blue-500/10 text-blue-400 border-blue-500/30";
+        return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800";
       default:
-        return "bg-gray-500/10 text-gray-600 dark:text-gray-400 border-gray-500/30";
+        return "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400 border-gray-200 dark:border-gray-700";
     }
   };
 
@@ -349,236 +356,188 @@ export default function AlertsPage() {
     { value: "high_error_rate", label: "High Error Rate" },
   ];
 
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Alerts</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">
-            Configure notification channels and alert rules
-          </p>
-        </div>
-      </div>
+  const tabs = [
+    { id: "channels", label: "Channels" },
+    { id: "rules", label: "Rules" },
+    { id: "history", label: "History" },
+  ];
 
+  return (
+    <PageLayout
+      title="Alerts"
+      description="Configure notification channels and alert rules"
+      actions={
+        activeTab !== "history" && (
+          <Button
+            variant="primary"
+            icon={Plus}
+            onClick={() => {
+              if (activeTab === "channels") {
+                resetChannelForm();
+                setEditingChannel(null);
+                setShowChannelModal(true);
+              } else {
+                resetRuleForm();
+                setEditingRule(null);
+                setShowRuleModal(true);
+              }
+            }}
+          >
+            Add {activeTab === "channels" ? "Channel" : "Rule"}
+          </Button>
+        )
+      }
+    >
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 bg-white dark:bg-gray-900 p-1 rounded-lg w-fit">
-        <button
-          onClick={() => setActiveTab("channels")}
-          className={cn(
-            "px-4 py-2 text-sm font-medium rounded-md transition-colors",
-            activeTab === "channels"
-              ? "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white"
-              : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
-          )}
-        >
-          <div className="flex items-center gap-2">
-            <Settings className="h-4 w-4" />
-            Channels
-          </div>
-        </button>
-        <button
-          onClick={() => setActiveTab("rules")}
-          className={cn(
-            "px-4 py-2 text-sm font-medium rounded-md transition-colors",
-            activeTab === "rules"
-              ? "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white"
-              : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
-          )}
-        >
-          <div className="flex items-center gap-2">
-            <Bell className="h-4 w-4" />
-            Rules
-          </div>
-        </button>
-        <button
-          onClick={() => setActiveTab("history")}
-          className={cn(
-            "px-4 py-2 text-sm font-medium rounded-md transition-colors",
-            activeTab === "history"
-              ? "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white"
-              : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
-          )}
-        >
-          <div className="flex items-center gap-2">
-            <History className="h-4 w-4" />
-            History
-          </div>
-        </button>
+      <div className="mb-6">
+        <Tabs tabs={tabs} activeTab={activeTab} onChange={(id) => setActiveTab(id as Tab)} />
       </div>
 
       {/* Channels Tab */}
       {activeTab === "channels" && (
-        <div>
-          <div className="flex justify-end mb-4">
-            <button
-              onClick={() => {
-                resetChannelForm();
-                setEditingChannel(null);
-                setShowChannelModal(true);
-              }}
-              className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-gray-900 dark:text-white rounded-lg transition-colors"
-            >
-              <Plus className="h-4 w-4" />
-              Add Channel
-            </button>
-          </div>
-
-          <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800">
-            {channelsLoading ? (
-              <div className="flex items-center justify-center h-32">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500" />
-              </div>
-            ) : channels && channels.length > 0 ? (
-              <div className="divide-y divide-gray-800">
-                {channels.map((channel) => (
-                  <div
-                    key={channel.id}
-                    className="flex items-center justify-between p-4"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className={cn(
-                        "p-2 rounded-lg",
-                        channel.enabled ? "bg-primary-500/10 text-primary-400" : "bg-gray-100 dark:bg-gray-800 text-gray-500"
-                      )}>
-                        {getChannelIcon(channel.channel_type)}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-gray-900 dark:text-white font-medium">{channel.name}</span>
-                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 uppercase">
-                            {channel.channel_type}
-                          </span>
-                          {!channel.enabled && (
-                            <span className="text-xs px-2 py-0.5 rounded bg-yellow-500/10 text-yellow-400">
-                              Disabled
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-sm text-gray-500 mt-0.5">
-                          Created {formatRelativeTime(channel.created_at)}
-                        </p>
-                      </div>
+        <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800">
+          {channelsLoading ? (
+            <div className="flex items-center justify-center h-32">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500" />
+            </div>
+          ) : channels && channels.length > 0 ? (
+            <div className="divide-y divide-gray-100 dark:divide-gray-800">
+              {channels.map((channel) => (
+                <div
+                  key={channel.id}
+                  className="flex items-center justify-between p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className={cn(
+                      "p-2 rounded-lg",
+                      channel.enabled ? "bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400" : "bg-gray-100 dark:bg-gray-800 text-gray-500"
+                    )}>
+                      {getChannelIcon(channel.channel_type)}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => testChannelMutation.mutate(channel.id)}
-                        disabled={testChannelMutation.isPending}
-                        className="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:bg-gray-800"
-                        title="Send test"
-                      >
-                        <Send className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => openEditChannel(channel)}
-                        className="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:bg-gray-800"
-                        title="Edit"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => deleteChannelMutation.mutate(channel.id)}
-                        className="p-2 text-gray-600 dark:text-gray-400 hover:text-red-400 rounded-lg hover:bg-gray-100 dark:bg-gray-800"
-                        title="Delete"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-900 dark:text-white font-medium">{channel.name}</span>
+                        <span className="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 uppercase">
+                          {channel.channel_type}
+                        </span>
+                        {!channel.enabled && (
+                          <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400">
+                            Disabled
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm text-gray-500 mt-0.5">
+                        Created {formatRelativeTime(channel.created_at)}
+                      </p>
                     </div>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <div className="py-12 text-center text-gray-500">
-                <Settings className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>No notification channels configured</p>
-                <p className="text-sm mt-1">Add a channel to receive alerts</p>
-              </div>
-            )}
-          </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => testChannelMutation.mutate(channel.id)}
+                      disabled={testChannelMutation.isPending}
+                      className="p-2 text-gray-400 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                      title="Send test"
+                    >
+                      <Send className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => openEditChannel(channel)}
+                      className="p-2 text-gray-400 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                      title="Edit"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => deleteChannelMutation.mutate(channel.id)}
+                      className="p-2 text-gray-400 hover:text-red-500 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                      title="Delete"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="py-12">
+              <EmptyState
+                icon={Settings}
+                title="No notification channels configured"
+                description="Add a channel to receive alerts"
+              />
+            </div>
+          )}
         </div>
       )}
 
       {/* Rules Tab */}
       {activeTab === "rules" && (
-        <div>
-          <div className="flex justify-end mb-4">
-            <button
-              onClick={() => {
-                resetRuleForm();
-                setEditingRule(null);
-                setShowRuleModal(true);
-              }}
-              className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-gray-900 dark:text-white rounded-lg transition-colors"
-            >
-              <Plus className="h-4 w-4" />
-              Add Rule
-            </button>
-          </div>
-
-          <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800">
-            {rulesLoading ? (
-              <div className="flex items-center justify-center h-32">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500" />
-              </div>
-            ) : rules && rules.length > 0 ? (
-              <div className="divide-y divide-gray-800">
-                {rules.map((rule) => (
-                  <div
-                    key={rule.id}
-                    className="flex items-center justify-between p-4"
-                  >
-                    <div className="flex items-center gap-4">
-                      <button
-                        onClick={() => toggleRuleMutation.mutate({ id: rule.id, enabled: !rule.enabled })}
-                        className={cn(
-                          "transition-colors",
-                          rule.enabled ? "text-green-400" : "text-gray-500"
-                        )}
-                      >
-                        {rule.enabled ? (
-                          <ToggleRight className="h-6 w-6" />
-                        ) : (
-                          <ToggleLeft className="h-6 w-6" />
-                        )}
-                      </button>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-gray-900 dark:text-white font-medium">{rule.name}</span>
-                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400">
-                            {ruleTypes.find((t) => t.value === rule.rule_type)?.label || rule.rule_type}
-                          </span>
-                        </div>
-                        <p className="text-sm text-gray-500 mt-0.5">
-                          Cooldown: {rule.cooldown_mins} mins | {rule.channels.length} channel(s)
-                        </p>
+        <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800">
+          {rulesLoading ? (
+            <div className="flex items-center justify-center h-32">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500" />
+            </div>
+          ) : rules && rules.length > 0 ? (
+            <div className="divide-y divide-gray-100 dark:divide-gray-800">
+              {rules.map((rule) => (
+                <div
+                  key={rule.id}
+                  className="flex items-center justify-between p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+                >
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={() => toggleRuleMutation.mutate({ id: rule.id, enabled: !rule.enabled })}
+                      className={cn(
+                        "transition-colors",
+                        rule.enabled ? "text-green-500" : "text-gray-400"
+                      )}
+                    >
+                      {rule.enabled ? (
+                        <ToggleRight className="h-6 w-6" />
+                      ) : (
+                        <ToggleLeft className="h-6 w-6" />
+                      )}
+                    </button>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-900 dark:text-white font-medium">{rule.name}</span>
+                        <span className="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500">
+                          {ruleTypes.find((t) => t.value === rule.rule_type)?.label || rule.rule_type}
+                        </span>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => openEditRule(rule)}
-                        className="p-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:bg-gray-800"
-                        title="Edit"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => deleteRuleMutation.mutate(rule.id)}
-                        className="p-2 text-gray-600 dark:text-gray-400 hover:text-red-400 rounded-lg hover:bg-gray-100 dark:bg-gray-800"
-                        title="Delete"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      <p className="text-sm text-gray-500 mt-0.5">
+                        Cooldown: {rule.cooldown_mins} mins | {rule.channels.length} channel(s)
+                      </p>
                     </div>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <div className="py-12 text-center text-gray-500">
-                <Bell className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>No alert rules configured</p>
-                <p className="text-sm mt-1">Create a rule to start monitoring</p>
-              </div>
-            )}
-          </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => openEditRule(rule)}
+                      className="p-2 text-gray-400 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                      title="Edit"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => deleteRuleMutation.mutate(rule.id)}
+                      className="p-2 text-gray-400 hover:text-red-500 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                      title="Delete"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="py-12">
+              <EmptyState
+                icon={Bell}
+                title="No alert rules configured"
+                description="Create a rule to start monitoring"
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -590,20 +549,20 @@ export default function AlertsPage() {
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500" />
             </div>
           ) : history && history.length > 0 ? (
-            <div className="divide-y divide-gray-800">
+            <div className="divide-y divide-gray-100 dark:divide-gray-800">
               {history.map((entry) => (
                 <div
                   key={entry.id}
-                  className="flex items-center gap-4 p-4"
+                  className="flex items-center gap-4 p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
                 >
                   <div className={cn(
                     "p-2 rounded-lg",
-                    entry.resolved_at ? "bg-green-500/10" : "bg-red-500/10"
+                    entry.resolved_at ? "bg-green-100 dark:bg-green-900/30" : "bg-red-100 dark:bg-red-900/30"
                   )}>
                     {entry.resolved_at ? (
-                      <Check className="h-4 w-4 text-green-400" />
+                      <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
                     ) : (
-                      <AlertTriangle className="h-4 w-4 text-red-400" />
+                      <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />
                     )}
                   </div>
                   <div className="flex-1">
@@ -624,7 +583,7 @@ export default function AlertsPage() {
                         {formatRelativeTime(entry.triggered_at)}
                       </span>
                       {entry.resolved_at && (
-                        <span className="text-green-400">
+                        <span className="text-green-600 dark:text-green-400">
                           Resolved {formatRelativeTime(entry.resolved_at)}
                         </span>
                       )}
@@ -634,10 +593,12 @@ export default function AlertsPage() {
               ))}
             </div>
           ) : (
-            <div className="py-12 text-center text-gray-500">
-              <History className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>No alert history</p>
-              <p className="text-sm mt-1">Triggered alerts will appear here</p>
+            <div className="py-12">
+              <EmptyState
+                icon={History}
+                title="No alert history"
+                description="Triggered alerts will appear here"
+              />
             </div>
           )}
         </div>
@@ -646,7 +607,7 @@ export default function AlertsPage() {
       {/* Channel Modal */}
       {showChannelModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-900 rounded-lg p-6 w-full max-w-md border border-gray-200 dark:border-gray-800">
+          <div className="bg-white dark:bg-gray-900 rounded-lg p-6 w-full max-w-md border border-gray-200 dark:border-gray-800 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">
                 {editingChannel ? "Edit Channel" : "Add Channel"}
@@ -656,34 +617,28 @@ export default function AlertsPage() {
                   setShowChannelModal(false);
                   setEditingChannel(null);
                 }}
-                className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
             <form onSubmit={handleChannelSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Name
-                </label>
-                <input
-                  type="text"
-                  value={channelForm.name}
-                  onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })}
-                  required
-                  placeholder="My Slack Channel"
-                  className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                />
-              </div>
+              <Input
+                label="Name"
+                value={channelForm.name}
+                onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })}
+                required
+                placeholder="My Slack Channel"
+              />
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
                   Type
                 </label>
                 <select
                   value={channelForm.channel_type}
                   onChange={(e) => setChannelForm({ ...channelForm, channel_type: e.target.value as "smtp" | "slack" | "webhook" })}
-                  className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
+                  className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 >
                   <option value="slack">Slack</option>
                   <option value="smtp">Email (SMTP)</option>
@@ -693,104 +648,72 @@ export default function AlertsPage() {
 
               {/* Slack Config */}
               {channelForm.channel_type === "slack" && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Webhook URL
-                  </label>
-                  <input
-                    type="url"
-                    value={channelForm.webhook_url}
-                    onChange={(e) => setChannelForm({ ...channelForm, webhook_url: e.target.value })}
-                    required
-                    placeholder="https://hooks.slack.com/services/..."
-                    className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                  />
-                </div>
+                <Input
+                  label="Webhook URL"
+                  type="url"
+                  value={channelForm.webhook_url}
+                  onChange={(e) => setChannelForm({ ...channelForm, webhook_url: e.target.value })}
+                  required
+                  placeholder="https://hooks.slack.com/services/..."
+                />
               )}
 
               {/* SMTP Config */}
               {channelForm.channel_type === "smtp" && (
                 <>
                   <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        SMTP Host
-                      </label>
-                      <input
-                        type="text"
-                        value={channelForm.smtp_host}
-                        onChange={(e) => setChannelForm({ ...channelForm, smtp_host: e.target.value })}
-                        required
-                        placeholder="smtp.example.com"
-                        className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        Port
-                      </label>
-                      <input
-                        type="number"
-                        value={channelForm.smtp_port}
-                        onChange={(e) => setChannelForm({ ...channelForm, smtp_port: parseInt(e.target.value) })}
-                        required
-                        className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      From Email
-                    </label>
-                    <input
-                      type="email"
-                      value={channelForm.smtp_from}
-                      onChange={(e) => setChannelForm({ ...channelForm, smtp_from: e.target.value })}
+                    <Input
+                      label="SMTP Host"
+                      value={channelForm.smtp_host}
+                      onChange={(e) => setChannelForm({ ...channelForm, smtp_host: e.target.value })}
                       required
-                      placeholder="alerts@example.com"
-                      className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
+                      placeholder="smtp.example.com"
+                    />
+                    <Input
+                      label="Port"
+                      type="number"
+                      value={channelForm.smtp_port}
+                      onChange={(e) => setChannelForm({ ...channelForm, smtp_port: parseInt(e.target.value) })}
+                      required
                     />
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      To Emails (comma-separated)
-                    </label>
-                    <input
-                      type="text"
-                      value={channelForm.smtp_to}
-                      onChange={(e) => setChannelForm({ ...channelForm, smtp_to: e.target.value })}
-                      required
-                      placeholder="admin@example.com, ops@example.com"
-                      className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                    />
-                  </div>
+                  <Input
+                    label="From Email"
+                    type="email"
+                    value={channelForm.smtp_from}
+                    onChange={(e) => setChannelForm({ ...channelForm, smtp_from: e.target.value })}
+                    required
+                    placeholder="alerts@example.com"
+                  />
+                  <Input
+                    label="To Emails (comma-separated)"
+                    value={channelForm.smtp_to}
+                    onChange={(e) => setChannelForm({ ...channelForm, smtp_to: e.target.value })}
+                    required
+                    placeholder="admin@example.com, ops@example.com"
+                  />
                 </>
               )}
 
               {/* Webhook Config */}
               {channelForm.channel_type === "webhook" && (
                 <>
+                  <Input
+                    label="Webhook URL"
+                    type="url"
+                    value={channelForm.webhook_url}
+                    onChange={(e) => setChannelForm({ ...channelForm, webhook_url: e.target.value })}
+                    required
+                    placeholder="https://api.example.com/webhook"
+                  />
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Webhook URL
-                    </label>
-                    <input
-                      type="url"
-                      value={channelForm.webhook_url}
-                      onChange={(e) => setChannelForm({ ...channelForm, webhook_url: e.target.value })}
-                      required
-                      placeholder="https://api.example.com/webhook"
-                      className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
                       Method
                     </label>
                     <select
                       value={channelForm.webhook_method}
                       onChange={(e) => setChannelForm({ ...channelForm, webhook_method: e.target.value })}
-                      className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
+                      className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                     >
                       <option value="POST">POST</option>
                       <option value="PUT">PUT</option>
@@ -805,7 +728,7 @@ export default function AlertsPage() {
                   id="channel-enabled"
                   checked={channelForm.enabled}
                   onChange={(e) => setChannelForm({ ...channelForm, enabled: e.target.checked })}
-                  className="w-4 h-4 rounded border-gray-600 bg-gray-700"
+                  className="w-4 h-4 rounded border-gray-300 dark:border-gray-600"
                 />
                 <label htmlFor="channel-enabled" className="text-sm text-gray-700 dark:text-gray-300">
                   Enabled
@@ -813,23 +736,23 @@ export default function AlertsPage() {
               </div>
 
               <div className="flex justify-end gap-3 pt-4">
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() => {
                     setShowChannelModal(false);
                     setEditingChannel(null);
                   }}
-                  className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
+                  variant="primary"
                   disabled={createChannelMutation.isPending || updateChannelMutation.isPending}
-                  className="px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-800 text-gray-900 dark:text-white rounded-lg"
                 >
                   {editingChannel ? "Save" : "Create"}
-                </button>
+                </Button>
               </div>
             </form>
           </div>
@@ -839,7 +762,7 @@ export default function AlertsPage() {
       {/* Rule Modal */}
       {showRuleModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-900 rounded-lg p-6 w-full max-w-md border border-gray-200 dark:border-gray-800">
+          <div className="bg-white dark:bg-gray-900 rounded-lg p-6 w-full max-w-md border border-gray-200 dark:border-gray-800 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">
                 {editingRule ? "Edit Rule" : "Add Rule"}
@@ -849,34 +772,28 @@ export default function AlertsPage() {
                   setShowRuleModal(false);
                   setEditingRule(null);
                 }}
-                className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
             <form onSubmit={handleRuleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Name
-                </label>
-                <input
-                  type="text"
-                  value={ruleForm.name}
-                  onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })}
-                  required
-                  placeholder="Container crash alert"
-                  className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                />
-              </div>
+              <Input
+                label="Name"
+                value={ruleForm.name}
+                onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })}
+                required
+                placeholder="Container crash alert"
+              />
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
                   Rule Type
                 </label>
                 <select
                   value={ruleForm.rule_type}
                   onChange={(e) => setRuleForm({ ...ruleForm, rule_type: e.target.value })}
-                  className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
+                  className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 >
                   {ruleTypes.map((type) => (
                     <option key={type.value} value={type.value}>
@@ -887,13 +804,13 @@ export default function AlertsPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
                   Notification Channels
                 </label>
                 {channels && channels.length > 0 ? (
-                  <div className="space-y-2">
+                  <div className="space-y-2 p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg">
                     {channels.map((channel) => (
-                      <label key={channel.id} className="flex items-center gap-2">
+                      <label key={channel.id} className="flex items-center gap-2 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={ruleForm.channels.includes(channel.id)}
@@ -904,7 +821,7 @@ export default function AlertsPage() {
                               setRuleForm({ ...ruleForm, channels: ruleForm.channels.filter((c) => c !== channel.id) });
                             }
                           }}
-                          className="w-4 h-4 rounded border-gray-600 bg-gray-700"
+                          className="w-4 h-4 rounded border-gray-300 dark:border-gray-600"
                         />
                         <span className="text-sm text-gray-700 dark:text-gray-300">{channel.name}</span>
                         <span className="text-xs text-gray-500">({channel.channel_type})</span>
@@ -912,7 +829,9 @@ export default function AlertsPage() {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500">No channels configured. Create a channel first.</p>
+                  <p className="text-sm text-gray-500 p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg">
+                    No channels configured. Create a channel first.
+                  </p>
                 )}
               </div>
 
@@ -921,97 +840,55 @@ export default function AlertsPage() {
                 ruleForm.rule_type === "high_memory" ||
                 ruleForm.rule_type === "high_restart_count" ||
                 ruleForm.rule_type === "high_error_rate") && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Threshold {ruleForm.rule_type === "high_cpu" || ruleForm.rule_type === "high_memory" ? "(%)" :
-                              ruleForm.rule_type === "high_error_rate" ? "(errors/min)" : "(restarts)"}
-                  </label>
-                  <input
-                    type="number"
-                    value={ruleForm.threshold}
-                    onChange={(e) => setRuleForm({ ...ruleForm, threshold: parseFloat(e.target.value) })}
-                    min={1}
-                    step={ruleForm.rule_type === "high_error_rate" ? "0.1" : "1"}
-                    className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                  />
-                </div>
+                <Input
+                  label={`Threshold ${ruleForm.rule_type === "high_cpu" || ruleForm.rule_type === "high_memory" ? "(%)" :
+                            ruleForm.rule_type === "high_error_rate" ? "(errors/min)" : "(restarts)"}`}
+                  type="number"
+                  value={ruleForm.threshold}
+                  onChange={(e) => setRuleForm({ ...ruleForm, threshold: parseFloat(e.target.value) })}
+                />
               )}
 
               {ruleForm.rule_type === "high_error_rate" && (
                 <>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Time Window (minutes)
-                    </label>
-                    <input
-                      type="number"
-                      value={ruleForm.window_mins}
-                      onChange={(e) => setRuleForm({ ...ruleForm, window_mins: parseInt(e.target.value) })}
-                      min={1}
-                      className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">Period to check for errors</p>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Container Pattern (optional)
-                    </label>
-                    <input
-                      type="text"
-                      value={ruleForm.container_pattern}
-                      onChange={(e) => setRuleForm({ ...ruleForm, container_pattern: e.target.value })}
-                      placeholder="e.g., nginx, api-"
-                      className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">Filter containers by name pattern</p>
-                  </div>
+                  <Input
+                    label="Time Window (minutes)"
+                    type="number"
+                    value={ruleForm.window_mins}
+                    onChange={(e) => setRuleForm({ ...ruleForm, window_mins: parseInt(e.target.value) })}
+                  />
+                  <Input
+                    label="Container Pattern (optional)"
+                    value={ruleForm.container_pattern}
+                    onChange={(e) => setRuleForm({ ...ruleForm, container_pattern: e.target.value })}
+                    placeholder="e.g., nginx, api-"
+                  />
                 </>
               )}
 
               {ruleForm.rule_type === "ssl_expiry" && (
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Warning (days)
-                    </label>
-                    <input
-                      type="number"
-                      value={ruleForm.warning_days}
-                      onChange={(e) => setRuleForm({ ...ruleForm, warning_days: parseInt(e.target.value) })}
-                      min={1}
-                      className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">Days before expiry</p>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Critical (days)
-                    </label>
-                    <input
-                      type="number"
-                      value={ruleForm.critical_days}
-                      onChange={(e) => setRuleForm({ ...ruleForm, critical_days: parseInt(e.target.value) })}
-                      min={1}
-                      className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">Days before expiry</p>
-                  </div>
+                  <Input
+                    label="Warning (days)"
+                    type="number"
+                    value={ruleForm.warning_days}
+                    onChange={(e) => setRuleForm({ ...ruleForm, warning_days: parseInt(e.target.value) })}
+                  />
+                  <Input
+                    label="Critical (days)"
+                    type="number"
+                    value={ruleForm.critical_days}
+                    onChange={(e) => setRuleForm({ ...ruleForm, critical_days: parseInt(e.target.value) })}
+                  />
                 </div>
               )}
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Cooldown (minutes)
-                </label>
-                <input
-                  type="number"
-                  value={ruleForm.cooldown_mins}
-                  onChange={(e) => setRuleForm({ ...ruleForm, cooldown_mins: parseInt(e.target.value) })}
-                  min={1}
-                  className="w-full px-4 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white"
-                />
-                <p className="text-xs text-gray-500 mt-1">Time between repeated alerts</p>
-              </div>
+              <Input
+                label="Cooldown (minutes)"
+                type="number"
+                value={ruleForm.cooldown_mins}
+                onChange={(e) => setRuleForm({ ...ruleForm, cooldown_mins: parseInt(e.target.value) })}
+              />
 
               <div className="flex items-center gap-2">
                 <input
@@ -1019,7 +896,7 @@ export default function AlertsPage() {
                   id="rule-enabled"
                   checked={ruleForm.enabled}
                   onChange={(e) => setRuleForm({ ...ruleForm, enabled: e.target.checked })}
-                  className="w-4 h-4 rounded border-gray-600 bg-gray-700"
+                  className="w-4 h-4 rounded border-gray-300 dark:border-gray-600"
                 />
                 <label htmlFor="rule-enabled" className="text-sm text-gray-700 dark:text-gray-300">
                   Enabled
@@ -1027,28 +904,28 @@ export default function AlertsPage() {
               </div>
 
               <div className="flex justify-end gap-3 pt-4">
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() => {
                     setShowRuleModal(false);
                     setEditingRule(null);
                   }}
-                  className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
+                  variant="primary"
                   disabled={createRuleMutation.isPending || updateRuleMutation.isPending}
-                  className="px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-800 text-gray-900 dark:text-white rounded-lg"
                 >
                   {editingRule ? "Save" : "Create"}
-                </button>
+                </Button>
               </div>
             </form>
           </div>
         </div>
       )}
-    </div>
+    </PageLayout>
   );
 }
