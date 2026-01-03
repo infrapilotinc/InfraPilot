@@ -15,34 +15,46 @@ fi
 
 case "$1" in
   "up")
-    echo "Starting development environment..."
-    cd "$PROJECT_ROOT/deployments"
-    $COMPOSE up -d postgres redis
+    echo "Starting full dev stack with hot reload..."
+    cd "$PROJECT_ROOT"
+    $COMPOSE -f docker-compose.dev.yml up -d
+    echo ""
+    echo "Services starting..."
+    echo "  Dashboard: http://localhost"
+    echo "  API:       http://localhost/api/v1"
+    echo ""
+    echo "View logs: ./scripts/dev.sh logs"
+    ;;
+
+  "up:db")
+    echo "Starting database services only..."
+    cd "$PROJECT_ROOT"
+    $COMPOSE -f docker-compose.dev.yml up -d postgres redis
     echo "Waiting for services..."
     sleep 3
     echo "Database and Redis are ready!"
     echo ""
     echo "To start the backend: cd backend && go run ./cmd/server"
-    echo "To start the frontend: cd frontend && npm run dev"
+    echo "To start the frontend: cd frontend && pnpm dev"
     ;;
 
   "down")
     echo "Stopping development environment..."
-    cd "$PROJECT_ROOT/deployments"
-    $COMPOSE down
+    cd "$PROJECT_ROOT"
+    $COMPOSE -f docker-compose.dev.yml down
     ;;
 
   "reset")
     echo "Resetting database..."
-    cd "$PROJECT_ROOT/deployments"
-    $COMPOSE down -v
-    $COMPOSE up -d postgres redis
+    cd "$PROJECT_ROOT"
+    $COMPOSE -f docker-compose.dev.yml down -v
+    $COMPOSE -f docker-compose.dev.yml up -d postgres redis
     echo "Database reset complete!"
     ;;
 
   "logs")
-    cd "$PROJECT_ROOT/deployments"
-    $COMPOSE logs -f "${@:2}"
+    cd "$PROJECT_ROOT"
+    $COMPOSE -f docker-compose.dev.yml logs -f "${@:2}"
     ;;
 
   "proto")
@@ -57,14 +69,14 @@ case "$1" in
 
   "migrate")
     echo "Running migrations..."
-    cd "$PROJECT_ROOT/deployments"
-    $COMPOSE exec postgres psql -U infrapilot -d infrapilot -f /docker-entrypoint-initdb.d/001_initial_schema.sql
+    cd "$PROJECT_ROOT"
+    $COMPOSE -f docker-compose.dev.yml exec postgres psql -U infrapilot -d infrapilot -f /docker-entrypoint-initdb.d/001_initial_schema.sql
     ;;
 
   "seed")
     echo "Seeding database..."
     cd "$PROJECT_ROOT"
-    $COMPOSE -f deployments/docker-compose.yml exec -T postgres psql -U infrapilot -d infrapilot < scripts/seed.sql
+    $COMPOSE -f docker-compose.dev.yml exec -T postgres psql -U infrapilot -d infrapilot < scripts/seed.sql
     echo ""
     echo "Test users created:"
     echo "  admin@infrapilot.local / admin123 (super_admin)"
@@ -84,18 +96,23 @@ case "$1" in
     echo "Usage: ./scripts/dev.sh <command>"
     echo ""
     echo "Commands:"
-    echo "  up      Start development services (postgres, redis)"
-    echo "  down    Stop development services"
+    echo "  up      Start full dev stack (all services with hot reload)"
+    echo "  up:db   Start only postgres and redis (for local backend/frontend)"
+    echo "  down    Stop all development services"
     echo "  reset   Reset database (destroys all data)"
-    echo "  logs    View service logs"
+    echo "  logs    View service logs (e.g., logs backend)"
     echo "  proto   Generate protobuf code"
     echo "  migrate Run database migrations"
     echo "  seed    Create test users and data"
     echo "  air     Install Air for hot reload"
     echo ""
-    echo "Quick Start:"
-    echo "  1. ./scripts/dev.sh up"
+    echo "Quick Start (Docker):"
+    echo "  ./scripts/dev.sh up"
+    echo "  Open http://localhost"
+    echo ""
+    echo "Quick Start (Local):"
+    echo "  1. ./scripts/dev.sh up:db"
     echo "  2. cd backend && go run ./cmd/server"
-    echo "  3. cd frontend && npm run dev"
+    echo "  3. cd frontend && pnpm dev"
     ;;
 esac
