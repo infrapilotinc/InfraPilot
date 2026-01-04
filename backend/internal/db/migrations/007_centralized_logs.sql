@@ -35,26 +35,26 @@ CREATE TABLE IF NOT EXISTS centralized_logs (
 -- ============================================================
 
 -- Primary query pattern: logs by org, agent, time range
-CREATE INDEX idx_centralized_logs_org_time
+CREATE INDEX IF NOT EXISTS idx_centralized_logs_org_time
     ON centralized_logs(org_id, log_timestamp DESC);
 
-CREATE INDEX idx_centralized_logs_agent_time
+CREATE INDEX IF NOT EXISTS idx_centralized_logs_agent_time
     ON centralized_logs(agent_id, log_timestamp DESC);
 
 -- Filter by source (container name)
-CREATE INDEX idx_centralized_logs_source
+CREATE INDEX IF NOT EXISTS idx_centralized_logs_source
     ON centralized_logs(org_id, source, log_timestamp DESC);
 
 -- Filter by level (errors, warnings)
-CREATE INDEX idx_centralized_logs_level
+CREATE INDEX IF NOT EXISTS idx_centralized_logs_level
     ON centralized_logs(org_id, level, log_timestamp DESC);
 
 -- Full-text search on message (optional, can be expensive)
-CREATE INDEX idx_centralized_logs_message_search
+CREATE INDEX IF NOT EXISTS idx_centralized_logs_message_search
     ON centralized_logs USING gin(to_tsvector('english', message));
 
 -- Partition-ready: index on ingested_at for retention cleanup
-CREATE INDEX idx_centralized_logs_ingested
+CREATE INDEX IF NOT EXISTS idx_centralized_logs_ingested
     ON centralized_logs(ingested_at);
 
 -- ============================================================
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS log_ingestion_stats (
 );
 
 -- Index for querying stats
-CREATE INDEX idx_log_ingestion_stats_org_date
+CREATE INDEX IF NOT EXISTS idx_log_ingestion_stats_org_date
     ON log_ingestion_stats(org_id, date DESC);
 
 -- ============================================================
@@ -115,6 +115,7 @@ CREATE INDEX idx_log_ingestion_stats_org_date
 ALTER TABLE centralized_logs ENABLE ROW LEVEL SECURITY;
 
 -- Policy: Users can only see logs from their organization
+DROP POLICY IF EXISTS centralized_logs_org_isolation ON centralized_logs;
 CREATE POLICY centralized_logs_org_isolation ON centralized_logs
     FOR ALL
     USING (org_id = current_setting('app.current_org_id', true)::uuid);
@@ -122,6 +123,7 @@ CREATE POLICY centralized_logs_org_isolation ON centralized_logs
 -- Enable RLS on retention config
 ALTER TABLE log_retention_config ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS log_retention_config_org_isolation ON log_retention_config;
 CREATE POLICY log_retention_config_org_isolation ON log_retention_config
     FOR ALL
     USING (org_id = current_setting('app.current_org_id', true)::uuid);
@@ -129,6 +131,7 @@ CREATE POLICY log_retention_config_org_isolation ON log_retention_config
 -- Enable RLS on stats
 ALTER TABLE log_ingestion_stats ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS log_ingestion_stats_org_isolation ON log_ingestion_stats;
 CREATE POLICY log_ingestion_stats_org_isolation ON log_ingestion_stats
     FOR ALL
     USING (org_id = current_setting('app.current_org_id', true)::uuid);
@@ -138,7 +141,8 @@ CREATE POLICY log_ingestion_stats_org_isolation ON log_ingestion_stats
 -- ============================================================
 
 -- Function to get storage usage for an org
-CREATE OR REPLACE FUNCTION get_org_log_storage(p_org_id UUID)
+DROP FUNCTION IF EXISTS get_org_log_storage(UUID);
+CREATE FUNCTION get_org_log_storage(p_org_id UUID)
 RETURNS BIGINT AS $$
     SELECT COALESCE(SUM(pg_column_size(message) + pg_column_size(metadata)), 0)
     FROM centralized_logs
@@ -146,7 +150,8 @@ RETURNS BIGINT AS $$
 $$ LANGUAGE SQL STABLE;
 
 -- Function to cleanup old logs based on retention
-CREATE OR REPLACE FUNCTION cleanup_old_logs(p_org_id UUID DEFAULT NULL)
+DROP FUNCTION IF EXISTS cleanup_old_logs(UUID);
+CREATE FUNCTION cleanup_old_logs(p_org_id UUID DEFAULT NULL)
 RETURNS INT AS $$
 DECLARE
     deleted_count INT := 0;

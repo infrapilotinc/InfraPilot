@@ -118,11 +118,29 @@ func (m *Manager) LoadOrEnroll(ctx context.Context) error {
 
 	// No valid credentials, need to enroll
 	if m.enrollmentToken == "" {
-		return fmt.Errorf("no enrollment token provided - set ENROLLMENT_TOKEN env var")
+		// Community standalone mode - use default credentials
+		m.logger.Info("No enrollment token, using standalone mode with default agent")
+		m.credentials = &Credentials{
+			AgentID:     "00000000-0000-0000-0000-000000000001",
+			OrgID:       "00000000-0000-0000-0000-000000000001",
+			Fingerprint: "standalone",
+			Hostname:    m.getHostname(),
+			EnrolledAt:  time.Now().Format(time.RFC3339),
+		}
+		return m.saveCredentials()
 	}
 
 	m.logger.Info("Enrolling agent with backend")
 	return m.enroll(ctx)
+}
+
+// getHostname returns the hostname or "standalone" if unavailable
+func (m *Manager) getHostname() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "standalone"
+	}
+	return hostname
 }
 
 // loadCredentials loads credentials from the local file
