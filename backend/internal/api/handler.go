@@ -1,21 +1,11 @@
 package api
 
 import (
-	"os"
-
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	"github.com/infrapilot/backend/internal/auth"
-	"github.com/infrapilot/backend/internal/enterprise/audit"
-	"github.com/infrapilot/backend/internal/enterprise/license"
-	"github.com/infrapilot/backend/internal/enterprise/multitenancy"
-	"github.com/infrapilot/backend/internal/enterprise/policy"
-	"github.com/infrapilot/backend/internal/enterprise/sso"
-	ssoldap "github.com/infrapilot/backend/internal/enterprise/sso/ldap"
-	"github.com/infrapilot/backend/internal/enterprise/sso/oidc"
-	"github.com/infrapilot/backend/internal/enterprise/sso/saml"
 )
 
 type Handler struct {
@@ -38,10 +28,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 
 	// API v1 routes
 	v1 := r.Group("/api/v1")
-	v1.Use(license.Middleware()) // Add license context to all requests
 	{
-		// License info (public - needed for UI to show edition)
-		v1.GET("/license", license.LicenseInfoHandler())
 		// Setup routes (public - only work when no users exist)
 		v1.GET("/setup/status", h.getSetupStatus)
 		v1.POST("/setup", h.createInitialAdmin)
@@ -98,7 +85,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				agents.PUT("/:id/proxies/:pid/rate-limits/:rlid", h.RequireModifyProxy(), h.updateRateLimit)
 				agents.DELETE("/:id/proxies/:pid/rate-limits/:rlid", h.RequireModifyProxy(), h.deleteRateLimit)
 
-				// Containers (TODO: Route through agent via gRPC in production)
+				// Containers
 				agents.GET("/:id/containers", h.listContainersReal)
 				agents.GET("/:id/containers/:cid", h.getContainerReal)
 				agents.POST("/:id/containers/:cid/start", h.RequireModifyContainers(), h.startContainerReal)
@@ -174,142 +161,17 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				settings.PUT("/domain", h.updateInfraPilotDomain)
 				settings.DELETE("/domain", h.deleteInfraPilotDomain)
 			}
-
-			// SSO Providers (super_admin only - enterprise feature)
-			ssoHandler := sso.NewHandler(h.db)
-			ssoGroup := protected.Group("/sso")
-			ssoGroup.Use(h.RequireRole(auth.RoleSuperAdmin))
-			{
-				ssoGroup.GET("/providers", ssoHandler.ListProviders)
-				ssoGroup.POST("/providers", ssoHandler.CreateProvider)
-				ssoGroup.GET("/providers/:id", ssoHandler.GetProvider)
-				ssoGroup.PUT("/providers/:id", ssoHandler.UpdateProvider)
-				ssoGroup.DELETE("/providers/:id", ssoHandler.DeleteProvider)
-				ssoGroup.GET("/providers/:id/mappings", ssoHandler.ListRoleMappings)
-				ssoGroup.POST("/providers/:id/mappings", ssoHandler.CreateRoleMapping)
-				ssoGroup.DELETE("/providers/:id/mappings/:mid", ssoHandler.DeleteRoleMapping)
-			}
-
-			// Enterprise Audit & Compliance (super_admin only - enterprise feature)
-			auditHandler := audit.NewHandler(h.db, h.logger)
-			auditGroup := protected.Group("/audit")
-			auditGroup.Use(h.RequireRole(auth.RoleSuperAdmin))
-			{
-				// Configuration
-				auditGroup.GET("/config", auditHandler.GetConfig)
-				auditGroup.PUT("/config", auditHandler.UpdateConfig)
-
-				// Exports
-				auditGroup.GET("/exports", auditHandler.ListExports)
-				auditGroup.POST("/exports", auditHandler.CreateExport)
-				auditGroup.GET("/exports/:id", auditHandler.GetExport)
-				auditGroup.GET("/exports/:id/download", auditHandler.DownloadExport)
-
-				// Compliance Reports
-				auditGroup.GET("/reports", auditHandler.ListReports)
-				auditGroup.POST("/reports", auditHandler.CreateReport)
-				auditGroup.GET("/reports/:id", auditHandler.GetReport)
-
-				// Forwarding
-				auditGroup.POST("/forwarding/test", auditHandler.TestForwarding)
-
-				// Retention & Integrity
-				auditGroup.POST("/retention/cleanup", auditHandler.RunRetentionCleanup)
-				auditGroup.GET("/integrity", auditHandler.VerifyIntegrity)
-			}
-
-			// Multi-Tenancy (enterprise feature)
-			mtHandler := multitenancy.NewHandler(h.db, h.logger)
-
-			// Organizations
-			orgs := protected.Group("/orgs")
-			{
-				orgs.GET("", mtHandler.ListOrganizations)
-				orgs.POST("", mtHandler.CreateOrganization)
-				orgs.GET("/:id", mtHandler.GetOrganization)
-				orgs.PUT("/:id", h.RequireRole(auth.RoleSuperAdmin), mtHandler.UpdateOrganization)
-				orgs.DELETE("/:id", h.RequireRole(auth.RoleSuperAdmin), mtHandler.DeleteOrganization)
-				orgs.GET("/:id/usage", mtHandler.GetOrganizationUsage)
-
-				// Members
-				orgs.GET("/:id/members", mtHandler.ListMembers)
-				orgs.POST("/:id/members", h.RequireRole(auth.RoleSuperAdmin), mtHandler.AddMember)
-				orgs.PUT("/:id/members/:uid", h.RequireRole(auth.RoleSuperAdmin), mtHandler.UpdateMember)
-				orgs.DELETE("/:id/members/:uid", h.RequireRole(auth.RoleSuperAdmin), mtHandler.RemoveMember)
-
-				// Invitations
-				orgs.GET("/:id/invitations", mtHandler.ListInvitations)
-				orgs.POST("/:id/invitations", h.RequireRole(auth.RoleSuperAdmin), mtHandler.CreateInvitation)
-				orgs.DELETE("/:id/invitations/:iid", h.RequireRole(auth.RoleSuperAdmin), mtHandler.RevokeInvitation)
-
-				// Enrollment Tokens
-				orgs.GET("/:id/enrollment-tokens", mtHandler.ListEnrollmentTokens)
-				orgs.POST("/:id/enrollment-tokens", h.RequireRole(auth.RoleSuperAdmin), mtHandler.CreateEnrollmentToken)
-				orgs.PUT("/:id/enrollment-tokens/:tid/revoke", h.RequireRole(auth.RoleSuperAdmin), mtHandler.RevokeEnrollmentToken)
-				orgs.DELETE("/:id/enrollment-tokens/:tid", h.RequireRole(auth.RoleSuperAdmin), mtHandler.DeleteEnrollmentToken)
-			}
-
-			// Accept invitation (public within protected - user must be logged in)
-			protected.POST("/invitations/:token/accept", mtHandler.AcceptInvitation)
-
-			// Policy Engine (enterprise feature)
-			policyHandler := policy.NewHandler(h.db, h.logger)
-			policies := protected.Group("/policies")
-			{
-				policies.GET("", policyHandler.ListPolicies)
-				policies.POST("", h.RequireRole(auth.RoleAdmin, auth.RoleSuperAdmin), policyHandler.CreatePolicy)
-				policies.GET("/:id", policyHandler.GetPolicy)
-				policies.PUT("/:id", h.RequireRole(auth.RoleAdmin, auth.RoleSuperAdmin), policyHandler.UpdatePolicy)
-				policies.DELETE("/:id", h.RequireRole(auth.RoleAdmin, auth.RoleSuperAdmin), policyHandler.DeletePolicy)
-
-				// Templates
-				policies.GET("/templates", policyHandler.ListTemplates)
-				policies.POST("/templates/:id/create", h.RequireRole(auth.RoleAdmin, auth.RoleSuperAdmin), policyHandler.CreateFromTemplate)
-
-				// Violations
-				policies.GET("/violations", policyHandler.ListViolations)
-				policies.GET("/violations/:id", policyHandler.GetViolation)
-				policies.POST("/violations/:id/resolve", h.RequireRole(auth.RoleAdmin, auth.RoleSuperAdmin), policyHandler.ResolveViolation)
-
-				// Stats
-				policies.GET("/stats", policyHandler.GetPolicyStats)
-			}
 		}
 
-		// Public SSO routes (for login page - no auth required)
-		ssoPublicHandler := sso.NewHandler(h.db)
-		v1.GET("/auth/sso/providers", ssoPublicHandler.GetPublicProviders)
-
-		// OIDC authentication routes (public - for SSO flow)
-		baseURL := os.Getenv("BASE_URL")
-		if baseURL == "" {
-			baseURL = "http://localhost:8080"
-		}
-		jwtSecret := []byte(os.Getenv("JWT_SECRET"))
-
-		oidcHandler := oidc.NewHandler(h.db, baseURL, jwtSecret)
-		v1.GET("/auth/oidc/authorize", oidcHandler.Authorize)
-		v1.GET("/auth/oidc/callback", oidcHandler.Callback)
-
-		// SAML authentication routes (public - for SSO flow)
-		samlHandler := saml.NewHandler(h.db, baseURL, jwtSecret)
-		v1.GET("/auth/saml/metadata", samlHandler.Metadata)
-		v1.GET("/auth/saml/authorize", samlHandler.Authorize)
-		v1.POST("/auth/saml/acs", samlHandler.ACS)
-
-		// LDAP authentication routes (public - for SSO flow)
-		ldapHandler := ssoldap.NewHandler(h.db, jwtSecret)
-		v1.POST("/auth/ldap", ldapHandler.Authenticate)
-
-		// Agent enrollment routes (public - for SaaS one-liner install)
+		// Agent enrollment routes
 		v1.POST("/agents/enroll", h.EnrollAgent)
 		v1.GET("/agents/enroll/status", h.GetEnrollmentStatus)
 		v1.POST("/agents/heartbeat", h.AgentHeartbeat)
 
-		// Agent WebSocket command stream (public - agents connect with their ID)
+		// Agent WebSocket command stream
 		v1.GET("/agents/:id/ws/commands", h.agentCommandStream)
 
-		// Log ingestion (public - agents push logs)
+		// Log ingestion (agents push logs)
 		v1.POST("/logs/ingest", h.IngestLogs)
 	}
 
@@ -329,9 +191,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 
 // Health check endpoint
 func (h *Handler) healthCheck(c *gin.Context) {
-	lic := license.Current()
 	c.JSON(200, gin.H{
 		"status":  "ok",
-		"edition": lic.Edition,
+		"edition": "community",
 	})
 }

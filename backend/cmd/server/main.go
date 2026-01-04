@@ -20,7 +20,6 @@ import (
 	"github.com/infrapilot/backend/internal/auth"
 	"github.com/infrapilot/backend/internal/config"
 	"github.com/infrapilot/backend/internal/db"
-	"github.com/infrapilot/backend/internal/enterprise/license"
 	agentgrpc "github.com/infrapilot/backend/internal/grpc"
 )
 
@@ -57,10 +56,6 @@ func main() {
 		logger.Fatal("Failed to run migrations", zap.Error(err))
 	}
 
-	// Initialize license
-	if err := license.Init(); err != nil {
-		logger.Warn("Failed to initialize license", zap.Error(err))
-	}
 	logger.Info("InfraPilot Community Edition started")
 
 	// Initialize auth service

@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/infrapilot/backend/internal/enterprise/policy"
 	agentgrpc "github.com/infrapilot/backend/internal/grpc"
 )
 
@@ -115,34 +114,10 @@ func (h *Handler) listProxyHosts(c *gin.Context) {
 	c.JSON(http.StatusOK, proxies)
 }
 
-// evaluateProxyPolicy checks policies before proxy actions
+// evaluateProxyPolicy checks policies before proxy actions (community edition - no policy engine)
 func (h *Handler) evaluateProxyPolicy(c *gin.Context, orgID uuid.UUID, domain string, sslEnabled bool, action string) (bool, string) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
-	defer cancel()
-
-	// Build resource for policy evaluation
-	resource := policy.Resource{
-		Type: "proxy",
-		ID:   domain,
-		Attributes: map[string]interface{}{
-			"domain":      domain,
-			"ssl_enabled": sslEnabled,
-			"action":      action,
-		},
-	}
-
-	// Evaluate policies
-	evaluator := policy.NewEvaluator(h.db, h.logger)
-	blocked, message, err := evaluator.EvaluateAndBlock(ctx, orgID, resource)
-	if err != nil {
-		h.logger.Warn("Policy evaluation failed for proxy",
-			zap.String("domain", domain),
-			zap.Error(err),
-		)
-		return false, ""
-	}
-
-	return blocked, message
+	// Community edition: no policy engine, always allow
+	return false, ""
 }
 
 // createProxyHost creates a new proxy host for an agent
