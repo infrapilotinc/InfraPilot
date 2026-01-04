@@ -54,6 +54,86 @@ export interface Container {
   created_at?: string;
 }
 
+export interface PortMapping {
+  container_port: number;
+  host_port: number;
+  protocol: string;
+  host_ip?: string;
+}
+
+export interface MountInfo {
+  type: string;
+  source: string;
+  destination: string;
+  mode: string;
+  read_only: boolean;
+}
+
+export interface EnvVar {
+  key: string;
+  value: string;
+}
+
+export interface ContainerConfig {
+  hostname: string;
+  domainname: string;
+  user: string;
+  working_dir: string;
+  entrypoint: string[];
+  cmd: string[];
+  restart_policy: string;
+  privileged: boolean;
+  tty: boolean;
+  open_stdin: boolean;
+}
+
+export interface HealthCheckConfig {
+  test: string[];
+  interval: string;
+  timeout: string;
+  start_period: string;
+  retries: number;
+}
+
+export interface HealthLogEntry {
+  start: string;
+  end: string;
+  exit_code: number;
+  output: string;
+}
+
+export interface NetworkDetail {
+  name: string;
+  network_id: string;
+  ip_address: string;
+  gateway: string;
+  mac_address: string;
+  aliases?: string[];
+}
+
+export interface ResourceLimits {
+  cpu_shares: number;
+  cpu_quota: number;
+  cpu_period: number;
+  cpuset_cpus: string;
+  memory_limit: number;
+  memory_swap: number;
+  pids_limit: number;
+}
+
+export interface ContainerDetail extends Container {
+  ports: PortMapping[];
+  mounts: MountInfo[];
+  environment: EnvVar[];
+  config: ContainerConfig;
+  health_check?: HealthCheckConfig;
+  health_status?: string;
+  health_log?: HealthLogEntry[];
+  labels: Record<string, string>;
+  network_details: NetworkDetail[];
+  resources: ResourceLimits;
+}
+
 export interface Stack {
   name: string;
   container_count: number;
@@ -323,6 +403,336 @@ export interface InfraPilotDomainSettings {
   status?: string;
 }
 
+// SSO types
+export type SSOProviderType = "saml" | "oidc" | "ldap";
+
+export interface SSOProvider {
+  id: string;
+  org_id: string;
+  name: string;
+  provider_type: SSOProviderType;
+  enabled: boolean;
+  // SAML
+  saml_entity_id?: string;
+  saml_sso_url?: string;
+  saml_slo_url?: string;
+  saml_certificate?: string;
+  saml_sign_requests?: boolean;
+  saml_name_id_format?: string;
+  // OIDC
+  oidc_issuer?: string;
+  oidc_client_id?: string;
+  oidc_client_secret?: string;
+  oidc_scopes?: string;
+  oidc_redirect_uri?: string;
+  // LDAP
+  ldap_host?: string;
+  ldap_port?: number;
+  ldap_use_tls?: boolean;
+  ldap_skip_verify?: boolean;
+  ldap_bind_dn?: string;
+  ldap_bind_password?: string;
+  ldap_base_dn?: string;
+  ldap_user_filter?: string;
+  ldap_group_filter?: string;
+  ldap_email_attr?: string;
+  ldap_name_attr?: string;
+  ldap_group_attr?: string;
+  // Common
+  default_role: string;
+  auto_create_users: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SSOPublicProvider {
+  id: string;
+  name: string;
+  provider_type: SSOProviderType;
+}
+
+export interface SSORoleMapping {
+  id: string;
+  provider_id: string;
+  external_group: string;
+  role: string;
+  created_at: string;
+}
+
+export interface CreateSSOProviderRequest {
+  name: string;
+  provider_type: SSOProviderType;
+  enabled?: boolean;
+  // Type-specific fields
+  saml_entity_id?: string;
+  saml_sso_url?: string;
+  saml_certificate?: string;
+  oidc_issuer?: string;
+  oidc_client_id?: string;
+  oidc_client_secret?: string;
+  oidc_scopes?: string;
+  ldap_host?: string;
+  ldap_port?: number;
+  ldap_use_tls?: boolean;
+  ldap_bind_dn?: string;
+  ldap_bind_password?: string;
+  ldap_base_dn?: string;
+  ldap_user_filter?: string;
+  // Common
+  default_role?: string;
+  auto_create_users?: boolean;
+}
+
+// Enterprise Audit & Compliance types
+export interface AuditConfig {
+  id: string;
+  org_id: string;
+  retention_days: number;
+  retention_policy: "delete" | "archive" | "export";
+  forwarding_enabled: boolean;
+  forwarding_type?: "syslog" | "webhook" | "splunk" | "s3";
+  forwarding_config?: Record<string, unknown>;
+  compliance_mode?: "soc2" | "hipaa" | "gdpr" | "pci";
+  immutable_logs: boolean;
+  hash_chain_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AuditExport {
+  id: string;
+  org_id: string;
+  format: "csv" | "json" | "cef" | "syslog";
+  status: "pending" | "processing" | "completed" | "failed";
+  start_date?: string;
+  end_date?: string;
+  filters?: Record<string, unknown>;
+  row_count?: number;
+  file_size?: number;
+  download_url?: string;
+  expires_at?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface ComplianceReport {
+  id: string;
+  org_id: string;
+  report_type: "soc2" | "hipaa" | "access" | "activity" | "security";
+  status: "pending" | "generating" | "completed" | "failed";
+  start_date: string;
+  end_date: string;
+  summary?: Record<string, unknown>;
+  download_url?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface IntegrityCheckResult {
+  status: "valid" | "compromised";
+  verified: number;
+  broken_chain: number;
+  broken_entries?: Array<{
+    id: string;
+    expected_prev: string;
+    actual_prev: string;
+  }>;
+}
+
+// License types
+export type LicenseEdition = "community" | "enterprise";
+
+export interface LicenseLimits {
+  max_users: number;
+  max_agents: number;
+  max_resources: number;
+}
+
+export interface LicenseFeatureInfo {
+  feature: string;
+  name: string;
+  description: string;
+  licensed: boolean;
+}
+
+export interface LicenseInfo {
+  edition: LicenseEdition;
+  organization: string;
+  features: LicenseFeatureInfo[];
+  limits: LicenseLimits;
+  valid: boolean;
+  expires_at: string | null;
+}
+
+// Multi-tenancy types
+export type OrgPlan = "free" | "pro" | "team" | "enterprise";
+export type OrgMemberRole = "owner" | "admin" | "member" | "viewer";
+
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  plan: OrgPlan;
+  stripe_customer_id?: string;
+  subscription_status?: string;
+  max_users: number;
+  max_agents: number;
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  member_role?: OrgMemberRole; // When listing user's orgs
+}
+
+export interface OrganizationMember {
+  id: string;
+  org_id: string;
+  user_id: string;
+  role: OrgMemberRole;
+  invited_by?: string;
+  joined_at: string;
+  email?: string;
+  user_name?: string;
+}
+
+export interface OrganizationInvitation {
+  id: string;
+  org_id: string;
+  email: string;
+  role: OrgMemberRole;
+  token?: string;
+  expires_at: string;
+  accepted_at?: string;
+  created_by?: string;
+  created_at: string;
+}
+
+export interface EnrollmentToken {
+  id: string;
+  org_id: string;
+  token?: string;
+  name?: string;
+  created_by?: string;
+  expires_at?: string;
+  max_uses?: number;
+  use_count: number;
+  labels: Record<string, unknown>;
+  enabled: boolean;
+  created_at: string;
+  last_used_at?: string;
+}
+
+export interface OrgUsage {
+  users: number;
+  max_users: number;
+  agents: number;
+  max_agents: number;
+}
+
+export interface CreateOrgRequest {
+  name: string;
+  slug: string;
+}
+
+export interface UpdateOrgRequest {
+  name?: string;
+  max_users?: number;
+  max_agents?: number;
+  settings?: Record<string, unknown>;
+}
+
+export interface CreateInvitationRequest {
+  email: string;
+  role: OrgMemberRole;
+}
+
+export interface CreateEnrollmentTokenRequest {
+  name?: string;
+  expires_at?: string;
+  max_uses?: number;
+  labels?: Record<string, unknown>;
+}
+
+// Policy Engine types
+export type PolicyType = "container" | "proxy" | "access" | "security";
+export type PolicyAction = "block" | "warn" | "audit";
+
+export interface Policy {
+  id: string;
+  org_id: string;
+  name: string;
+  description?: string;
+  policy_type: PolicyType;
+  conditions: Record<string, unknown>;
+  action: PolicyAction;
+  applies_to?: Record<string, unknown>;
+  enabled: boolean;
+  priority: number;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PolicyTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  policy_type: PolicyType;
+  conditions: Record<string, unknown>;
+  recommended_action: PolicyAction;
+  category?: string;
+  created_at: string;
+}
+
+export interface PolicyViolation {
+  id: string;
+  policy_id: string;
+  policy_name?: string;
+  org_id: string;
+  agent_id?: string;
+  agent_name?: string;
+  resource_type: string;
+  resource_id?: string;
+  resource_name?: string;
+  message: string;
+  details?: Record<string, unknown>;
+  action_taken: PolicyAction;
+  resolved: boolean;
+  resolved_by?: string;
+  resolved_at?: string;
+  resolution_note?: string;
+  created_at: string;
+}
+
+export interface PolicyStats {
+  total_policies: number;
+  enabled_policies: number;
+  total_violations: number;
+  unresolved_violations: number;
+  blocked_actions: number;
+  warned_actions: number;
+}
+
+export interface CreatePolicyRequest {
+  name: string;
+  description?: string;
+  policy_type: PolicyType;
+  conditions: Record<string, unknown>;
+  action: PolicyAction;
+  applies_to?: Record<string, unknown>;
+  enabled?: boolean;
+  priority?: number;
+}
+
+export interface UpdatePolicyRequest {
+  name?: string;
+  description?: string;
+  conditions?: Record<string, unknown>;
+  action?: PolicyAction;
+  applies_to?: Record<string, unknown>;
+  enabled?: boolean;
+  priority?: number;
+}
+
 // API methods
 export const api = {
   // Setup (first-run)
@@ -374,6 +784,9 @@ export const api = {
   getContainers: (agentId: string) =>
     fetchAPI<Container[]>(`/agents/${agentId}/containers`),
 
+  getContainerDetail: (agentId: string, containerId: string) =>
+    fetchAPI<ContainerDetail>(`/agents/${agentId}/containers/${containerId}`),
+
   startContainer: (agentId: string, containerId: string) =>
     fetchAPI(`/agents/${agentId}/containers/${containerId}/start`, {
       method: "POST",
@@ -388,6 +801,15 @@ export const api = {
     fetchAPI(`/agents/${agentId}/containers/${containerId}/restart`, {
       method: "POST",
     }),
+
+  deleteContainer: (agentId: string, containerId: string, confirmName: string, force: boolean = false) =>
+    fetchAPI<{ message: string; container_id: string; name: string }>(
+      `/agents/${agentId}/containers/${containerId}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({ confirm_name: confirmName, force }),
+      }
+    ),
 
   getContainerLogs: (agentId: string, containerId: string, tail: number = 100) =>
     fetchAPI<{ container_id: string; logs: string }>(
@@ -744,4 +1166,251 @@ export const api = {
     fetchAPI<{ success: boolean; message: string }>(`/agents/${agentId}/nginx/reload`, {
       method: "POST",
     }),
+
+  // License
+  getLicenseInfo: () => fetchAPI<LicenseInfo>("/license"),
+
+  // SSO Providers (admin)
+  getSSOProviders: () => fetchAPI<SSOProvider[]>("/sso/providers"),
+  getSSOProvider: (id: string) => fetchAPI<SSOProvider>(`/sso/providers/${id}`),
+  createSSOProvider: (data: CreateSSOProviderRequest) =>
+    fetchAPI<SSOProvider>("/sso/providers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateSSOProvider: (id: string, data: Partial<CreateSSOProviderRequest>) =>
+    fetchAPI<SSOProvider>(`/sso/providers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  deleteSSOProvider: (id: string) =>
+    fetchAPI(`/sso/providers/${id}`, {
+      method: "DELETE",
+    }),
+  getSSOProviderMappings: (id: string) =>
+    fetchAPI<SSORoleMapping[]>(`/sso/providers/${id}/mappings`),
+  createSSOProviderMapping: (id: string, external_group: string, role: string) =>
+    fetchAPI<SSORoleMapping>(`/sso/providers/${id}/mappings`, {
+      method: "POST",
+      body: JSON.stringify({ external_group, role }),
+    }),
+  deleteSSOProviderMapping: (providerId: string, mappingId: string) =>
+    fetchAPI(`/sso/providers/${providerId}/mappings/${mappingId}`, {
+      method: "DELETE",
+    }),
+
+  // SSO Public (for login page)
+  getPublicSSOProviders: () => fetchAPI<SSOPublicProvider[]>("/auth/sso/providers"),
+
+  // Enterprise Audit & Compliance
+  getAuditConfig: () => fetchAPI<AuditConfig>("/audit/config"),
+
+  updateAuditConfig: (data: {
+    retention_days?: number;
+    retention_policy?: "delete" | "archive" | "export";
+    forwarding_enabled?: boolean;
+    forwarding_type?: "syslog" | "webhook" | "splunk" | "s3";
+    forwarding_config?: Record<string, unknown>;
+    compliance_mode?: "soc2" | "hipaa" | "gdpr" | "pci" | null;
+    immutable_logs?: boolean;
+    hash_chain_enabled?: boolean;
+  }) =>
+    fetchAPI<{ message: string }>("/audit/config", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  // Audit Exports
+  getAuditExports: () => fetchAPI<AuditExport[]>("/audit/exports"),
+
+  createAuditExport: (data: {
+    format: "csv" | "json" | "cef" | "syslog";
+    start_date?: string;
+    end_date?: string;
+    filters?: Record<string, unknown>;
+  }) =>
+    fetchAPI<{ id: string; status: string; message: string }>("/audit/exports", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  getAuditExport: (id: string) => fetchAPI<AuditExport>(`/audit/exports/${id}`),
+
+  downloadAuditExport: (id: string) => `${API_BASE}/audit/exports/${id}/download`,
+
+  // Compliance Reports
+  getComplianceReports: () => fetchAPI<ComplianceReport[]>("/audit/reports"),
+
+  createComplianceReport: (data: {
+    report_type: "soc2" | "hipaa" | "access" | "activity" | "security";
+    start_date: string;
+    end_date: string;
+  }) =>
+    fetchAPI<{ id: string; status: string; message: string }>("/audit/reports", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  getComplianceReport: (id: string) => fetchAPI<ComplianceReport>(`/audit/reports/${id}`),
+
+  // Forwarding Test
+  testAuditForwarding: () =>
+    fetchAPI<{ message: string }>("/audit/forwarding/test", {
+      method: "POST",
+    }),
+
+  // Retention Cleanup
+  runRetentionCleanup: () =>
+    fetchAPI<{ message: string; deleted: number; cutoff_date: string }>("/audit/retention/cleanup", {
+      method: "POST",
+    }),
+
+  // Integrity Verification
+  verifyAuditIntegrity: (limit?: number) =>
+    fetchAPI<IntegrityCheckResult>(`/audit/integrity${limit ? `?limit=${limit}` : ""}`),
+
+  // Organizations (Multi-tenancy)
+  getOrganizations: () => fetchAPI<Organization[]>("/orgs"),
+
+  getOrganization: (id: string) => fetchAPI<Organization>(`/orgs/${id}`),
+
+  createOrganization: (data: CreateOrgRequest) =>
+    fetchAPI<{ id: string }>("/orgs", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updateOrganization: (id: string, data: UpdateOrgRequest) =>
+    fetchAPI<{ status: string }>(`/orgs/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  deleteOrganization: (id: string) =>
+    fetchAPI<{ status: string }>(`/orgs/${id}`, {
+      method: "DELETE",
+    }),
+
+  getOrganizationUsage: (id: string) => fetchAPI<OrgUsage>(`/orgs/${id}/usage`),
+
+  // Organization Members
+  getOrganizationMembers: (orgId: string) =>
+    fetchAPI<OrganizationMember[]>(`/orgs/${orgId}/members`),
+
+  addOrganizationMember: (orgId: string, userId: string, role: OrgMemberRole) =>
+    fetchAPI<{ id: string }>(`/orgs/${orgId}/members`, {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId, role }),
+    }),
+
+  updateOrganizationMember: (orgId: string, userId: string, role: OrgMemberRole) =>
+    fetchAPI<{ status: string }>(`/orgs/${orgId}/members/${userId}`, {
+      method: "PUT",
+      body: JSON.stringify({ role }),
+    }),
+
+  removeOrganizationMember: (orgId: string, userId: string) =>
+    fetchAPI<{ status: string }>(`/orgs/${orgId}/members/${userId}`, {
+      method: "DELETE",
+    }),
+
+  // Organization Invitations
+  getOrganizationInvitations: (orgId: string) =>
+    fetchAPI<OrganizationInvitation[]>(`/orgs/${orgId}/invitations`),
+
+  createOrganizationInvitation: (orgId: string, data: CreateInvitationRequest) =>
+    fetchAPI<{ id: string; token: string; expires_at: string }>(`/orgs/${orgId}/invitations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  revokeOrganizationInvitation: (orgId: string, invitationId: string) =>
+    fetchAPI<{ status: string }>(`/orgs/${orgId}/invitations/${invitationId}`, {
+      method: "DELETE",
+    }),
+
+  acceptInvitation: (token: string) =>
+    fetchAPI<{ status: string; org_id: string }>(`/invitations/${token}/accept`, {
+      method: "POST",
+    }),
+
+  // Enrollment Tokens
+  getEnrollmentTokens: (orgId: string) =>
+    fetchAPI<EnrollmentToken[]>(`/orgs/${orgId}/enrollment-tokens`),
+
+  createEnrollmentToken: (orgId: string, data: CreateEnrollmentTokenRequest) =>
+    fetchAPI<{ id: string; token: string }>(`/orgs/${orgId}/enrollment-tokens`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  revokeEnrollmentToken: (orgId: string, tokenId: string) =>
+    fetchAPI<{ status: string }>(`/orgs/${orgId}/enrollment-tokens/${tokenId}/revoke`, {
+      method: "PUT",
+    }),
+
+  deleteEnrollmentToken: (orgId: string, tokenId: string) =>
+    fetchAPI<{ status: string }>(`/orgs/${orgId}/enrollment-tokens/${tokenId}`, {
+      method: "DELETE",
+    }),
+
+  // Policy Engine
+  getPolicies: (options?: { type?: PolicyType; enabled?: boolean }) => {
+    const params = new URLSearchParams();
+    if (options?.type) params.set("type", options.type);
+    if (options?.enabled !== undefined) params.set("enabled", options.enabled.toString());
+    const query = params.toString();
+    return fetchAPI<Policy[]>(`/policies${query ? `?${query}` : ""}`);
+  },
+
+  getPolicy: (id: string) => fetchAPI<Policy>(`/policies/${id}`),
+
+  createPolicy: (data: CreatePolicyRequest) =>
+    fetchAPI<{ id: string }>("/policies", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updatePolicy: (id: string, data: UpdatePolicyRequest) =>
+    fetchAPI<{ status: string }>(`/policies/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  deletePolicy: (id: string) =>
+    fetchAPI<{ status: string }>(`/policies/${id}`, {
+      method: "DELETE",
+    }),
+
+  // Policy Templates
+  getPolicyTemplates: (category?: string) => {
+    const query = category ? `?category=${category}` : "";
+    return fetchAPI<PolicyTemplate[]>(`/policies/templates${query}`);
+  },
+
+  createPolicyFromTemplate: (templateId: string, data: { name: string; action?: PolicyAction; applies_to?: Record<string, unknown> }) =>
+    fetchAPI<{ id: string; template: string }>(`/policies/templates/${templateId}/create`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  // Policy Violations
+  getPolicyViolations: (options?: { resolved?: boolean; policy_id?: string; agent_id?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.resolved !== undefined) params.set("resolved", options.resolved.toString());
+    if (options?.policy_id) params.set("policy_id", options.policy_id);
+    if (options?.agent_id) params.set("agent_id", options.agent_id);
+    const query = params.toString();
+    return fetchAPI<PolicyViolation[]>(`/policies/violations${query ? `?${query}` : ""}`);
+  },
+
+  getPolicyViolation: (id: string) => fetchAPI<PolicyViolation>(`/policies/violations/${id}`),
+
+  resolvePolicyViolation: (id: string, resolutionNote: string) =>
+    fetchAPI<{ status: string }>(`/policies/violations/${id}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ resolution_note: resolutionNote }),
+    }),
+
+  getPolicyStats: () => fetchAPI<PolicyStats>("/policies/stats"),
 };

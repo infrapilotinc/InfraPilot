@@ -408,13 +408,14 @@ type MetricsResponse struct {
 // ============ Command Stream Types ============
 
 type BackendMessage struct {
-	RequestId string
-	Command   interface{} // One of: NginxCommand, DockerCommand, NetworkCommand, etc.
+	RequestId string      `json:"request_id"`
+	Command   interface{} `json:"command"` // One of: NginxCommand, DockerCommand, NetworkCommand, etc.
+	Type      string      `json:"type"`    // "nginx", "docker", "network"
 }
 
 type AgentMessage struct {
-	RequestId string
-	Response  interface{} // One of: CommandResult, ErrorResponse, etc.
+	RequestId string      `json:"request_id"`
+	Response  interface{} `json:"response"` // One of: CommandResult, ErrorResponse, etc.
 }
 
 // NginxCommand actions (string-based for JSON serialization)
@@ -511,6 +512,7 @@ type UnimplementedAgentServiceServer struct{}
 func NewNginxWriteConfigCommand(configContent, configPath string) *BackendMessage {
 	return &BackendMessage{
 		RequestId: uuid.New().String(),
+		Type:      "nginx",
 		Command: NginxCommand{
 			Action:        NginxActionWriteConfig,
 			ConfigContent: configContent,
@@ -523,6 +525,7 @@ func NewNginxWriteConfigCommand(configContent, configPath string) *BackendMessag
 func NewNginxTestConfigCommand() *BackendMessage {
 	return &BackendMessage{
 		RequestId: uuid.New().String(),
+		Type:      "nginx",
 		Command: NginxCommand{
 			Action: NginxActionTestConfig,
 		},
@@ -533,6 +536,7 @@ func NewNginxTestConfigCommand() *BackendMessage {
 func NewNginxReloadCommand() *BackendMessage {
 	return &BackendMessage{
 		RequestId: uuid.New().String(),
+		Type:      "nginx",
 		Command: NginxCommand{
 			Action: NginxActionReload,
 		},
@@ -543,6 +547,7 @@ func NewNginxReloadCommand() *BackendMessage {
 func NewNginxSSLCommand(domain, email, dnsProvider string) *BackendMessage {
 	return &BackendMessage{
 		RequestId: uuid.New().String(),
+		Type:      "nginx",
 		Command: NginxCommand{
 			Action:      NginxActionRequestSSL,
 			Domain:      domain,
@@ -556,6 +561,7 @@ func NewNginxSSLCommand(domain, email, dnsProvider string) *BackendMessage {
 func NewNetworkAttachCommand(networkID string) *BackendMessage {
 	return &BackendMessage{
 		RequestId: uuid.New().String(),
+		Type:      "network",
 		Command: NetworkCommand{
 			Action:    NetworkActionAttachNginxNetwork,
 			NetworkID: networkID,

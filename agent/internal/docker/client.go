@@ -66,6 +66,11 @@ func (c *Client) Close() error {
 	return c.cli.Close()
 }
 
+// Client returns the underlying Docker client for advanced operations
+func (c *Client) Client() *client.Client {
+	return c.cli
+}
+
 func (c *Client) ListContainers(ctx context.Context) ([]ContainerInfo, error) {
 	containers, err := c.cli.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Container as ContainerIcon,
@@ -19,6 +20,10 @@ import {
   Cpu,
   MemoryStick,
   Check,
+  ExternalLink,
+  Trash2,
+  AlertTriangle,
+  X,
 } from "lucide-react";
 import { api, Container } from "@/lib/api";
 import { Terminal } from "@/components/containers/Terminal";
@@ -39,6 +44,7 @@ import {
 type PanelTab = "details" | "logs" | "terminal";
 
 export default function ContainersPage() {
+  const router = useRouter();
   const queryClient = useQueryClient();
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [selectedContainer, setSelectedContainer] = useState<Container | null>(null);
@@ -46,6 +52,12 @@ export default function ContainersPage() {
   const [viewMode, setViewMode] = useState<"all" | "stacks">("all");
   const [logsTail, setLogsTail] = useState(100);
   const [copied, setCopied] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirmName, setDeleteConfirmName] = useState("");
+  const [forceDelete, setForceDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [showStopModal, setShowStopModal] = useState(false);
+  const [showRestartModal, setShowRestartModal] = useState(false);
 
   // Fetch agents
   const { data: agents } = useQuery({
@@ -93,6 +105,22 @@ export default function ContainersPage() {
       api.restartContainer(selectedAgent!, containerId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["containers", selectedAgent] });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () =>
+      api.deleteContainer(selectedAgent!, selectedContainer!.container_id, deleteConfirmName, forceDelete),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["containers", selectedAgent] });
+      setShowDeleteModal(false);
+      setDeleteConfirmName("");
+      setForceDelete(false);
+      setDeleteError(null);
+      setSelectedContainer(null);
+    },
+    onError: (error: Error) => {
+      setDeleteError(error.message);
     },
   });
 
@@ -220,21 +248,42 @@ export default function ContainersPage() {
         </div>
 
         {/* Quick metrics */}
-        <div className="flex items-center gap-4 mt-3 text-xs text-gray-500 dark:text-gray-400">
-          <div className="flex items-center gap-1">
-            <Cpu className="h-3 w-3" />
-            <span>{container.cpu_percent?.toFixed(1) || 0}%</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <MemoryStick className="h-3 w-3" />
-            <span>{container.memory_mb || 0} MB</span>
-          </div>
-          {container.stack_name && (
+        <div className="flex items-center justify-between mt-3">
+          <div className="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
             <div className="flex items-center gap-1">
-              <Layers className="h-3 w-3" />
-              <span className="truncate">{container.stack_name}</span>
+              <Cpu className="h-3 w-3" />
+              <span>{container.cpu_percent?.toFixed(1) || 0}%</span>
             </div>
-          )}
+            <div className="flex items-center gap-1">
+              <MemoryStick className="h-3 w-3" />
+              <span>{container.memory_mb || 0} MB</span>
+              {container.memory_limit_mb && container.memory_limit_mb > 0 && (
+                <span className="text-gray-400">/ {container.memory_limit_mb} MB</span>
+              )}
+            </div>
+            {container.stack_name && (
+              <div className="flex items-center gap-1">
+                <Layers className="h-3 w-3" />
+                <span className="truncate">{container.stack_name}</span>
+              </div>
+            )}
+            {(container.restart_count ?? 0) > 0 && (
+              <div className="flex items-center gap-1 text-yellow-600 dark:text-yellow-500">
+                <RefreshCw className="h-3 w-3" />
+                <span>{container.restart_count} restarts</span>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              router.push(`/containers/${selectedAgent}/${container.container_id}`);
+            }}
+            className="flex items-center gap-1 text-xs text-primary-600 dark:text-primary-400 hover:underline opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            <ExternalLink className="h-3 w-3" />
+            Details
+          </button>
         </div>
       </ListCard>
     );
@@ -383,7 +432,7 @@ export default function ContainersPage() {
                       variant="secondary"
                       size="sm"
                       icon={Square}
-                      onClick={() => handleContainerAction("stop", selectedContainer)}
+                      onClick={() => setShowStopModal(true)}
                       disabled={stopMutation.isPending}
                     >
                       Stop
@@ -392,7 +441,7 @@ export default function ContainersPage() {
                       variant="secondary"
                       size="sm"
                       icon={RotateCcw}
-                      onClick={() => handleContainerAction("restart", selectedContainer)}
+                      onClick={() => setShowRestartModal(true)}
                       disabled={restartMutation.isPending}
                     >
                       Restart
@@ -409,35 +458,63 @@ export default function ContainersPage() {
                     Start
                   </Button>
                 )}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={ExternalLink}
+                  onClick={() => router.push(`/containers/${selectedAgent}/${selectedContainer.container_id}`)}
+                >
+                  Full Details
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  icon={Trash2}
+                  onClick={() => {
+                    setDeleteConfirmName("");
+                    setForceDelete(false);
+                    setDeleteError(null);
+                    setShowDeleteModal(true);
+                  }}
+                >
+                  Delete
+                </Button>
               </div>
             </DetailSection>
 
             {/* Container Info */}
             <DetailSection title="Container Info">
-              <DetailRow label="Status">
-                <span className={cn(
-                  "px-2 py-0.5 text-xs font-medium rounded-full capitalize",
-                  getStatusBadgeClass(selectedContainer.status)
-                )}>
-                  {selectedContainer.status}
-                </span>
-              </DetailRow>
-              <DetailRow label="Container ID" mono>
-                <div className="flex items-center gap-1">
-                  <span>{selectedContainer.container_id.slice(0, 12)}</span>
-                  <button
-                    onClick={handleCopyId}
-                    className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
-                    title="Copy full ID"
-                  >
-                    {copied ? (
-                      <Check className="h-3 w-3 text-green-500" />
-                    ) : (
-                      <Copy className="h-3 w-3 text-gray-400" />
-                    )}
-                  </button>
-                </div>
-              </DetailRow>
+              <DetailRow
+                label="Status"
+                value={
+                  <span className={cn(
+                    "px-2 py-0.5 text-xs font-medium rounded-full capitalize",
+                    getStatusBadgeClass(selectedContainer.status)
+                  )}>
+                    {selectedContainer.status}
+                  </span>
+                }
+              />
+              <DetailRow
+                label="Container ID"
+                mono
+                value={
+                  <div className="flex items-center gap-1">
+                    <span>{selectedContainer.container_id.slice(0, 12)}</span>
+                    <button
+                      onClick={handleCopyId}
+                      className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
+                      title="Copy full ID"
+                    >
+                      {copied ? (
+                        <Check className="h-3 w-3 text-green-500" />
+                      ) : (
+                        <Copy className="h-3 w-3 text-gray-400" />
+                      )}
+                    </button>
+                  </div>
+                }
+              />
               <DetailRow label="Stack" value={selectedContainer.stack_name || "Standalone"} />
               {selectedContainer.created_at && (
                 <DetailRow
@@ -663,12 +740,28 @@ export default function ContainersPage() {
                             <div className="flex items-center gap-3">
                               <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
                                 <span>{container.cpu_percent?.toFixed(1) || 0}% CPU</span>
-                                <span>{container.memory_mb || 0} MB</span>
+                                <span>
+                                  {container.memory_mb || 0}
+                                  {container.memory_limit_mb && container.memory_limit_mb > 0 &&
+                                    `/${container.memory_limit_mb}`
+                                  } MB
+                                </span>
+                                {(container.restart_count ?? 0) > 0 && (
+                                  <span className="text-yellow-600 dark:text-yellow-500">
+                                    {container.restart_count} restarts
+                                  </span>
+                                )}
                               </div>
-                              <ChevronRight className={cn(
-                                "h-4 w-4 text-gray-400",
-                                isSelected && "text-primary-500"
-                              )} />
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  router.push(`/containers/${selectedAgent}/${container.container_id}`);
+                                }}
+                                className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
+                                title="View details"
+                              >
+                                <ExternalLink className="h-4 w-4 text-gray-400 hover:text-primary-500" />
+                              </button>
                             </div>
                           </div>
                         );
@@ -695,6 +788,242 @@ export default function ContainersPage() {
             : "Choose an agent to view its containers"
           }
         />
+      )}
+
+      {/* Stop Confirmation Modal */}
+      {showStopModal && selectedContainer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setShowStopModal(false)}
+          />
+          <div className="relative bg-white dark:bg-gray-900 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+            <button
+              onClick={() => setShowStopModal(false)}
+              className="absolute top-4 right-4 p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+            >
+              <X className="h-5 w-5 text-gray-500" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
+                <Square className="h-6 w-6 text-yellow-600 dark:text-yellow-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Stop Container
+                </h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Are you sure you want to stop this container?
+                </p>
+              </div>
+            </div>
+
+            <div className="mb-4 p-3 bg-gray-100 dark:bg-gray-800 rounded-lg">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Container</p>
+              <code className="text-sm text-gray-900 dark:text-white font-mono">
+                {selectedContainer.name}
+              </code>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowStopModal(false)}
+                className="flex-1 px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  handleContainerAction("stop", selectedContainer);
+                  setShowStopModal(false);
+                }}
+                disabled={stopMutation.isPending}
+                className="flex-1 px-4 py-2 text-white bg-yellow-600 hover:bg-yellow-700 disabled:bg-yellow-400 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                {stopMutation.isPending ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                    Stopping...
+                  </>
+                ) : (
+                  <>
+                    <Square className="h-4 w-4" />
+                    Stop Container
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restart Confirmation Modal */}
+      {showRestartModal && selectedContainer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setShowRestartModal(false)}
+          />
+          <div className="relative bg-white dark:bg-gray-900 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+            <button
+              onClick={() => setShowRestartModal(false)}
+              className="absolute top-4 right-4 p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+            >
+              <X className="h-5 w-5 text-gray-500" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+                <RotateCcw className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Restart Container
+                </h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Are you sure you want to restart this container?
+                </p>
+              </div>
+            </div>
+
+            <div className="mb-4 p-3 bg-gray-100 dark:bg-gray-800 rounded-lg">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Container</p>
+              <code className="text-sm text-gray-900 dark:text-white font-mono">
+                {selectedContainer.name}
+              </code>
+            </div>
+
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+              This will briefly interrupt any services running in this container.
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowRestartModal(false)}
+                className="flex-1 px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  handleContainerAction("restart", selectedContainer);
+                  setShowRestartModal(false);
+                }}
+                disabled={restartMutation.isPending}
+                className="flex-1 px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                {restartMutation.isPending ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                    Restarting...
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="h-4 w-4" />
+                    Restart Container
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && selectedContainer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setShowDeleteModal(false)}
+          />
+          <div className="relative bg-white dark:bg-gray-900 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+            <button
+              onClick={() => setShowDeleteModal(false)}
+              className="absolute top-4 right-4 p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+            >
+              <X className="h-5 w-5 text-gray-500" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
+                <AlertTriangle className="h-6 w-6 text-red-600 dark:text-red-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Delete Container
+                </h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  This action cannot be undone
+                </p>
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                To confirm deletion, type the container name:
+              </p>
+              <div className="p-3 bg-gray-100 dark:bg-gray-800 rounded-lg mb-3">
+                <code className="text-sm text-gray-900 dark:text-white font-mono">
+                  {selectedContainer.name}
+                </code>
+              </div>
+              <input
+                type="text"
+                value={deleteConfirmName}
+                onChange={(e) => setDeleteConfirmName(e.target.value)}
+                placeholder="Type container name to confirm"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-red-500 focus:border-transparent"
+              />
+            </div>
+
+            {selectedContainer.status === "running" && (
+              <div className="mb-4">
+                <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                  <input
+                    type="checkbox"
+                    checked={forceDelete}
+                    onChange={(e) => setForceDelete(e.target.checked)}
+                    className="rounded border-gray-300 dark:border-gray-700 text-red-600 focus:ring-red-500"
+                  />
+                  Force delete (stop container first)
+                </label>
+              </div>
+            )}
+
+            {deleteError && (
+              <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+                <p className="text-sm text-red-600 dark:text-red-400">{deleteError}</p>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                className="flex-1 px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => deleteMutation.mutate()}
+                disabled={deleteConfirmName !== selectedContainer.name || deleteMutation.isPending}
+                className="flex-1 px-4 py-2 text-white bg-red-600 hover:bg-red-700 disabled:bg-red-400 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                {deleteMutation.isPending ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    Delete Container
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </PageLayout>
   );

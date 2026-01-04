@@ -131,16 +131,23 @@ services:
       dockerfile: Dockerfile.dev
     container_name: infrapilot-dev-agent
     environment:
+      # For development, we use a static agent ID
+      # In production/SaaS, remove AGENT_ID and set ENROLLMENT_TOKEN instead
       AGENT_ID: "00000000-0000-0000-0000-000000000001"
+      # ENROLLMENT_TOKEN: "your-enrollment-token-here"
       BACKEND_GRPC_ADDR: backend:9090
+      BACKEND_HTTP_URL: http://backend:8080
       NGINX_CONTAINER_NAME: infrapilot-dev-nginx
       NGINX_CONFIG_PATH: /etc/nginx/sites
       PROXY_MODE: managed
+      DATA_DIR: /var/lib/infrapilot-agent
+      LOG_PERSISTENCE: "true"
     volumes:
       - ./agent:/app
       - /var/run/docker.sock:/var/run/docker.sock
       - nginx_dev_conf:/etc/nginx/sites
       - go_mod_cache:/go/pkg/mod
+      - agent_dev_data:/var/lib/infrapilot-agent
     depends_on:
       - backend
       - nginx
@@ -157,3 +164,4 @@ volumes:
   nginx_dev_conf:
   nginx_dev_certs:
   go_mod_cache:
+  agent_dev_data:

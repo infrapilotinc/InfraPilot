@@ -1,12 +1,21 @@
 # =============================================================
-# InfraPilot - Quick Start (All-in-One Image)
+# InfraPilot Community Edition - Single Node Deployment
 # =============================================================
 #
-# Usage:
+# Self-hosted, all-in-one deployment with built-in agent
+#
+# Quick Start:
 #   docker compose up -d
 #
 # Dashboard: http://localhost
-# Default:   admin@infrapilot.local / admin123
+# First-time setup creates admin account
+#
+# Features included:
+#   - Nginx proxy management with SSL automation
+#   - Docker container management
+#   - Real-time logs and terminal
+#   - Alerts and notifications
+#   - Health monitoring
 #
 # =============================================================
 
@@ -22,27 +31,27 @@ services:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
     environment:
-      # Required
-      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required - generate with: openssl rand -base64 32}"
+      # Required - generate with: openssl rand -base64 32
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required}"
 
-      # Optional - Database (uses embedded PostgreSQL if not set)
+      # Database (uses embedded PostgreSQL if not set)
       DATABASE_URL: ${DATABASE_URL:-}
       POSTGRES_USER: ${POSTGRES_USER:-infrapilot}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-infrapilot}
       POSTGRES_DB: ${POSTGRES_DB:-infrapilot}
 
-      # Optional - Redis (uses embedded Redis if not set)
+      # Redis (uses embedded Redis if not set)
       REDIS_URL: ${REDIS_URL:-}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-infrapilot}
 
-      # Optional - SSL/Let's Encrypt
+      # SSL/Let's Encrypt (optional)
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
       LETSENCRYPT_STAGING: ${LETSENCRYPT_STAGING:-true}
 
-      # Optional - CORS origins
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://localhost:80}
+      # CORS origins
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,https://localhost}
     volumes:
-      # Persistent data
+      # Persistent data (database, certs, config)
       - infrapilot_data:/data
 
       # Docker socket for container management

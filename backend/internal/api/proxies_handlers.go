@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/infrapilot/backend/internal/enterprise/policy"
 	agentgrpc "github.com/infrapilot/backend/internal/grpc"
 )
 
@@ -114,6 +115,36 @@ func (h *Handler) listProxyHosts(c *gin.Context) {
 	c.JSON(http.StatusOK, proxies)
 }
 
+// evaluateProxyPolicy checks policies before proxy actions
+func (h *Handler) evaluateProxyPolicy(c *gin.Context, orgID uuid.UUID, domain string, sslEnabled bool, action string) (bool, string) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	// Build resource for policy evaluation
+	resource := policy.Resource{
+		Type: "proxy",
+		ID:   domain,
+		Attributes: map[string]interface{}{
+			"domain":      domain,
+			"ssl_enabled": sslEnabled,
+			"action":      action,
+		},
+	}
+
+	// Evaluate policies
+	evaluator := policy.NewEvaluator(h.db, h.logger)
+	blocked, message, err := evaluator.EvaluateAndBlock(ctx, orgID, resource)
+	if err != nil {
+		h.logger.Warn("Policy evaluation failed for proxy",
+			zap.String("domain", domain),
+			zap.Error(err),
+		)
+		return false, ""
+	}
+
+	return blocked, message
+}
+
 // createProxyHost creates a new proxy host for an agent
 func (h *Handler) createProxyHost(c *gin.Context) {
 	orgID := c.MustGet("org_id").(uuid.UUID)
@@ -140,6 +171,15 @@ func (h *Handler) createProxyHost(c *gin.Context) {
 	var req CreateProxyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Check policies before creating proxy
+	if blocked, message := h.evaluateProxyPolicy(c, orgID, req.Domain, false, "create"); blocked {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Action blocked by policy",
+			"message": message,
+		})
 		return
 	}
 
@@ -291,6 +331,32 @@ func (h *Handler) updateProxyHost(c *gin.Context) {
 		return
 	}
 
+	// Get current proxy to check policies
+	var currentDomain string
+	var currentSSL bool
+	err = h.db.QueryRow(c.Request.Context(), `
+		SELECT domain, ssl_enabled FROM proxy_hosts WHERE id = $1 AND agent_id = $2
+	`, proxyID, agentID).Scan(&currentDomain, &currentSSL)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "proxy not found"})
+		return
+	}
+
+	// Use new domain if provided, otherwise current
+	domain := currentDomain
+	if req.Domain != nil {
+		domain = *req.Domain
+	}
+
+	// Check policies before updating proxy
+	if blocked, message := h.evaluateProxyPolicy(c, orgID, domain, currentSSL, "update"); blocked {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Action blocked by policy",
+			"message": message,
+		})
+		return
+	}
+
 	// Build dynamic update query
 	query := "UPDATE proxy_hosts SET updated_at = NOW()"
 	args := []interface{}{}
@@ -399,11 +465,25 @@ func (h *Handler) deleteProxyHost(c *gin.Context) {
 		return
 	}
 
-	// Get proxy domain for audit log before deleting
+	// Get proxy domain and SSL status for policy check and audit log
 	var domain string
-	h.db.QueryRow(c.Request.Context(), `
-		SELECT domain FROM proxy_hosts WHERE id = $1
-	`, proxyID).Scan(&domain)
+	var sslEnabled bool
+	err = h.db.QueryRow(c.Request.Context(), `
+		SELECT domain, ssl_enabled FROM proxy_hosts WHERE id = $1 AND agent_id = $2
+	`, proxyID, agentID).Scan(&domain, &sslEnabled)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "proxy host not found"})
+		return
+	}
+
+	// Check policies before deleting proxy
+	if blocked, message := h.evaluateProxyPolicy(c, orgID, domain, sslEnabled, "delete"); blocked {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Action blocked by policy",
+			"message": message,
+		})
+		return
+	}
 
 	result, err := h.db.Exec(c.Request.Context(), `
 		DELETE FROM proxy_hosts WHERE id = $1 AND agent_id = $2

@@ -15,12 +15,15 @@ import {
   Network,
   Check,
   ChevronRight,
+  ChevronDown,
   Lock,
   Gauge,
   Code,
   Pencil,
   X,
   RefreshCw,
+  Settings,
+  Loader2,
 } from "lucide-react";
 import { api, Container, SecurityHeaders, RateLimit } from "@/lib/api";
 import { formatRelativeTime, cn } from "@/lib/utils";
@@ -112,6 +115,14 @@ export default function ProxiesPage() {
   const [configContent, setConfigContent] = useState<string>("");
   const [configLoading, setConfigLoading] = useState(false);
 
+  // Proxy settings panel state
+  const [showProxySettings, setShowProxySettings] = useState(false);
+  const [domainInput, setDomainInput] = useState("");
+  const [sslEnabled, setSSLEnabled] = useState(true);
+  const [forceSSL, setForceSSL] = useState(true);
+  const [http2Enabled, setHTTP2Enabled] = useState(true);
+  const [domainHasChanges, setDomainHasChanges] = useState(false);
+
   // Fetch agents
   const { data: agents } = useQuery({
     queryKey: ["agents"],
@@ -155,6 +166,47 @@ export default function ProxiesPage() {
   });
 
   const activeAgents = agents?.filter((a) => a.status === "active") || [];
+
+  // Fetch InfraPilot domain settings
+  const { data: domainSettings, isLoading: domainLoading } = useQuery({
+    queryKey: ["infrapilotDomain"],
+    queryFn: () => api.getInfraPilotDomain(),
+  });
+
+  // Update domain form when settings load
+  useEffect(() => {
+    if (domainSettings?.domain) {
+      setDomainInput(domainSettings.domain);
+      setSSLEnabled(domainSettings.ssl_enabled);
+      setForceSSL(domainSettings.force_ssl);
+      setHTTP2Enabled(domainSettings.http2_enabled);
+    }
+  }, [domainSettings]);
+
+  // Domain save mutation
+  const domainSaveMutation = useMutation({
+    mutationFn: () =>
+      api.updateInfraPilotDomain({
+        domain: domainInput,
+        ssl_enabled: sslEnabled,
+        force_ssl: forceSSL,
+        http2_enabled: http2Enabled,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["infrapilotDomain"] });
+      setDomainHasChanges(false);
+    },
+  });
+
+  // Nginx test mutation
+  const nginxTestMutation = useMutation({
+    mutationFn: () => (selectedAgent ? api.testNginxConfig(selectedAgent) : Promise.reject("No agent")),
+  });
+
+  // Nginx reload mutation
+  const nginxReloadMutation = useMutation({
+    mutationFn: () => (selectedAgent ? api.reloadNginx(selectedAgent) : Promise.reject("No agent")),
+  });
 
   // Auto-select first active agent
   useEffect(() => {
@@ -735,22 +787,28 @@ export default function ProxiesPage() {
                 </DetailSection>
 
                 <DetailSection title="Proxy Info">
-                  <DetailRow label="Domain">
-                    <a
-                      href={`http${selectedProxy.ssl_enabled ? "s" : ""}://${selectedProxy.domain}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-primary-600 hover:text-primary-500 flex items-center gap-1"
-                    >
-                      {selectedProxy.domain}
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  </DetailRow>
-                  <DetailRow label="Status">
-                    <span className={cn("px-2 py-0.5 text-xs font-medium rounded-full", getStatusBadgeClass(selectedProxy.status))}>
-                      {selectedProxy.status}
-                    </span>
-                  </DetailRow>
+                  <DetailRow
+                    label="Domain"
+                    value={
+                      <a
+                        href={`http${selectedProxy.ssl_enabled ? "s" : ""}://${selectedProxy.domain}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary-600 hover:text-primary-500 flex items-center gap-1"
+                      >
+                        {selectedProxy.domain}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    }
+                  />
+                  <DetailRow
+                    label="Status"
+                    value={
+                      <span className={cn("px-2 py-0.5 text-xs font-medium rounded-full", getStatusBadgeClass(selectedProxy.status))}>
+                        {selectedProxy.status}
+                      </span>
+                    }
+                  />
                   <DetailRow label="Created" value={formatRelativeTime(selectedProxy.created_at)} />
                 </DetailSection>
 
@@ -857,6 +915,168 @@ export default function ProxiesPage() {
             </option>
           ))}
         </select>
+      </div>
+
+      {/* Proxy Settings (collapsible) */}
+      <div className="mb-6">
+        <button
+          onClick={() => setShowProxySettings(!showProxySettings)}
+          className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+        >
+          <Settings className="h-4 w-4" />
+          Proxy Settings
+          {showProxySettings ? (
+            <ChevronDown className="h-4 w-4" />
+          ) : (
+            <ChevronRight className="h-4 w-4" />
+          )}
+        </button>
+
+        {showProxySettings && (
+          <div className="mt-4 p-4 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 space-y-6">
+            {/* InfraPilot Domain */}
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                <Globe className="h-4 w-4 text-blue-400" />
+                InfraPilot Domain
+              </h3>
+              {domainLoading ? (
+                <div className="flex items-center justify-center py-4">
+                  <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {domainSettings?.domain && (
+                    <div className="flex items-center gap-2 p-2 bg-green-500/5 border border-green-500/20 rounded-lg">
+                      <div className="w-2 h-2 rounded-full bg-green-500" />
+                      <span className="text-sm font-medium text-gray-900 dark:text-white">
+                        {domainSettings.domain}
+                      </span>
+                      <span className="text-xs text-gray-500">
+                        {domainSettings.ssl_enabled ? "HTTPS" : "HTTP"}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex gap-4">
+                    <input
+                      type="text"
+                      value={domainInput}
+                      onChange={(e) => {
+                        setDomainInput(e.target.value);
+                        setDomainHasChanges(true);
+                      }}
+                      placeholder="infrapilot.example.com"
+                      className="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    />
+                    {domainHasChanges && domainInput && (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => domainSaveMutation.mutate()}
+                        disabled={domainSaveMutation.isPending}
+                      >
+                        {domainSaveMutation.isPending ? "Saving..." : "Save"}
+                      </Button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-4 text-sm">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={sslEnabled}
+                        onChange={(e) => {
+                          setSSLEnabled(e.target.checked);
+                          setDomainHasChanges(true);
+                        }}
+                        className="w-4 h-4 rounded"
+                      />
+                      <span className="text-gray-700 dark:text-gray-300">SSL/HTTPS</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={forceSSL}
+                        onChange={(e) => {
+                          setForceSSL(e.target.checked);
+                          setDomainHasChanges(true);
+                        }}
+                        className="w-4 h-4 rounded"
+                        disabled={!sslEnabled}
+                      />
+                      <span className={cn("text-gray-700 dark:text-gray-300", !sslEnabled && "opacity-50")}>
+                        Force HTTPS
+                      </span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={http2Enabled}
+                        onChange={(e) => {
+                          setHTTP2Enabled(e.target.checked);
+                          setDomainHasChanges(true);
+                        }}
+                        className="w-4 h-4 rounded"
+                        disabled={!sslEnabled}
+                      />
+                      <span className={cn("text-gray-700 dark:text-gray-300", !sslEnabled && "opacity-50")}>
+                        HTTP/2
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Nginx Controls */}
+            {selectedAgent && (
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                  <Network className="h-4 w-4 text-orange-400" />
+                  Nginx Controls
+                </h3>
+                <div className="flex flex-wrap gap-3">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={Check}
+                    onClick={() => nginxTestMutation.mutate()}
+                    disabled={nginxTestMutation.isPending}
+                    className={cn(
+                      nginxTestMutation.isSuccess && nginxTestMutation.data?.success
+                        ? "!text-green-500 !border-green-500/30"
+                        : nginxTestMutation.isError
+                        ? "!text-red-500 !border-red-500/30"
+                        : ""
+                    )}
+                  >
+                    {nginxTestMutation.isPending ? "Testing..." : "Test Config"}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={RefreshCw}
+                    onClick={() => nginxReloadMutation.mutate()}
+                    disabled={nginxReloadMutation.isPending}
+                  >
+                    {nginxReloadMutation.isPending ? "Reloading..." : "Reload Nginx"}
+                  </Button>
+                </div>
+                {(nginxTestMutation.isSuccess || nginxReloadMutation.isSuccess) && (
+                  <div
+                    className={cn(
+                      "mt-3 p-2 rounded-lg text-xs",
+                      (nginxTestMutation.data?.success || nginxReloadMutation.data?.success)
+                        ? "bg-green-500/10 text-green-400 border border-green-500/30"
+                        : "bg-red-500/10 text-red-400 border border-red-500/30"
+                    )}
+                  >
+                    {nginxTestMutation.data?.message || nginxReloadMutation.data?.message}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Proxies list */}

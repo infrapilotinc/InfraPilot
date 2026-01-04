@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"sync"
@@ -10,7 +11,9 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	agentgrpc "github.com/infrapilot/backend/internal/grpc"
 	"go.uber.org/zap"
 )
 
@@ -248,4 +251,134 @@ func (h *Handler) streamContainerLogs(c *gin.Context) {
 
 func (h *Handler) sendWSError(conn *websocket.Conn, msg string) {
 	conn.WriteMessage(websocket.TextMessage, []byte("\x1b[31mError: "+msg+"\x1b[0m\r\n"))
+}
+
+// agentCommandStream handles WebSocket command streaming for agents
+// This replaces the gRPC bidirectional stream with a WebSocket-based approach
+func (h *Handler) agentCommandStream(c *gin.Context) {
+	agentIDStr := c.Param("id")
+
+	// Validate agent ID
+	agentID, err := uuid.Parse(agentIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid agent ID"})
+		return
+	}
+
+	// Verify agent exists
+	var exists bool
+	err = h.db.QueryRow(c.Request.Context(), `
+		SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1)
+	`, agentID).Scan(&exists)
+	if err != nil || !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		return
+	}
+
+	// Upgrade to WebSocket
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		h.logger.Error("Failed to upgrade WebSocket for agent", zap.Error(err))
+		return
+	}
+	defer conn.Close()
+
+	h.logger.Info("Agent connected via WebSocket",
+		zap.String("agent_id", agentIDStr))
+
+	// Create channels for command stream
+	recvCh := make(chan *agentgrpc.AgentMessage, 100)
+	sendCh := make(chan *agentgrpc.BackendMessage, 100)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start the backend's command stream handler in a goroutine
+	go func() {
+		agentService := agentgrpc.NewAgentService(h.db, h.logger)
+		err := agentService.CommandStream(agentIDStr, recvCh, sendCh)
+		if err != nil {
+			h.logger.Debug("Agent command stream ended", zap.Error(err))
+		}
+		cancel()
+	}()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Goroutine to send commands to agent via WebSocket
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case cmd, ok := <-sendCh:
+				if !ok {
+					return
+				}
+				data, err := json.Marshal(cmd)
+				if err != nil {
+					h.logger.Error("Failed to marshal command", zap.Error(err))
+					continue
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+					h.logger.Debug("WebSocket write error", zap.Error(err))
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Goroutine to receive responses from agent via WebSocket
+	go func() {
+		defer wg.Done()
+		defer close(recvCh)
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+					h.logger.Debug("WebSocket read error", zap.Error(err))
+				}
+				cancel()
+				return
+			}
+
+			var agentMsg agentgrpc.AgentMessage
+			if err := json.Unmarshal(msg, &agentMsg); err != nil {
+				h.logger.Error("Failed to unmarshal agent message", zap.Error(err))
+				continue
+			}
+
+			select {
+			case recvCh <- &agentMsg:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Keep connection alive with pings
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					cancel()
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Wait for context to be cancelled
+	<-ctx.Done()
+	wg.Wait()
+
+	h.logger.Info("Agent disconnected from WebSocket",
+		zap.String("agent_id", agentIDStr))
 }

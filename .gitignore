@@ -47,4 +47,4 @@ redis_data/
 agent/tmp
 backend/tmp
 
-docsx
+# docsx

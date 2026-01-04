@@ -13,7 +13,9 @@ import (
 
 	"github.com/infrapilot/agent/internal/config"
 	"github.com/infrapilot/agent/internal/docker"
+	"github.com/infrapilot/agent/internal/enrollment"
 	agentgrpc "github.com/infrapilot/agent/internal/grpc"
+	"github.com/infrapilot/agent/internal/logstreamer"
 	"github.com/infrapilot/agent/internal/metrics"
 	"github.com/infrapilot/agent/internal/nginx"
 	"github.com/infrapilot/agent/internal/ssl"
@@ -65,6 +67,21 @@ func main() {
 	// Initialize metrics collector
 	metricsCollector := metrics.NewCollector(logger)
 
+	// Initialize enrollment manager
+	enrollmentMgr := enrollment.NewManager(cfg.BackendHTTPURL, cfg.EnrollmentToken, cfg.DataDir, logger)
+
+	// Load existing credentials or enroll with backend
+	// If AGENT_ID is set via env, use it (for backwards compatibility)
+	if cfg.AgentID != "" {
+		logger.Info("Using agent ID from environment", zap.String("agent_id", cfg.AgentID))
+	} else {
+		// Try to enroll or load existing credentials
+		if err := enrollmentMgr.LoadOrEnroll(ctx); err != nil {
+			logger.Fatal("Failed to enroll agent", zap.Error(err))
+		}
+		cfg.AgentID = enrollmentMgr.GetAgentID()
+	}
+
 	// Initialize gRPC client
 	grpcClient, err := agentgrpc.NewClient(cfg.BackendGRPCAddr, cfg.EnrollmentToken, logger)
 	if err != nil {
@@ -72,44 +89,38 @@ func main() {
 	}
 	defer grpcClient.Close()
 
-	// Register with backend if not already registered
-	if cfg.AgentID == "" {
-		hostname, _ := os.Hostname()
-		agentID, err := grpcClient.Register(ctx, hostname)
-		if err != nil {
-			logger.Fatal("Failed to register with backend", zap.Error(err))
-		}
-		cfg.AgentID = agentID
-		logger.Info("Registered with backend", zap.String("agent_id", agentID))
-	}
+	// Start heartbeat loop using enrollment manager (fingerprint-based)
+	if enrollmentMgr.IsEnrolled() {
+		enrollmentMgr.StartHeartbeatLoop(ctx, time.Duration(cfg.HeartbeatInterval)*time.Second)
+	} else {
+		// Fallback: start metrics-only heartbeat loop if using legacy agent ID
+		go func() {
+			ticker := time.NewTicker(time.Duration(cfg.HeartbeatInterval) * time.Second)
+			defer ticker.Stop()
 
-	// Start heartbeat loop
-	go func() {
-		ticker := time.NewTicker(time.Duration(cfg.HeartbeatInterval) * time.Second)
-		defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					// Collect metrics
+					sysMetrics := metricsCollector.CollectSystemMetrics()
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				// Collect metrics
-				sysMetrics := metricsCollector.CollectSystemMetrics()
+					// Get container states
+					containers, err := dockerClient.ListContainers(ctx)
+					if err != nil {
+						logger.Error("Failed to list containers", zap.Error(err))
+						continue
+					}
 
-				// Get container states
-				containers, err := dockerClient.ListContainers(ctx)
-				if err != nil {
-					logger.Error("Failed to list containers", zap.Error(err))
-					continue
-				}
-
-				// Send heartbeat
-				if err := grpcClient.Heartbeat(ctx, cfg.AgentID, sysMetrics, containers); err != nil {
-					logger.Error("Heartbeat failed", zap.Error(err))
+					// Send heartbeat via gRPC (legacy)
+					if err := grpcClient.Heartbeat(ctx, cfg.AgentID, sysMetrics, containers); err != nil {
+						logger.Error("Heartbeat failed", zap.Error(err))
+					}
 				}
 			}
-		}
-	}()
+		}()
+	}
 
 	// Initialize SSL/ACME certificate manager
 	var certManager *ssl.CertManager
@@ -151,6 +162,13 @@ func main() {
 	if cfg.IsManagedProxy() && nginxController != nil {
 		proxySyncer := sync.NewProxySyncer(cfg.BackendHTTPURL, cfg.AgentID, nginxController, logger)
 		go proxySyncer.Start(ctx)
+	}
+
+	// Start log streamer (sends container logs to backend for persistence)
+	if cfg.LogPersistence {
+		logStreamer := logstreamer.NewStreamer(dockerClient.Client(), cfg.BackendHTTPURL, cfg.AgentID, logger)
+		go logStreamer.Start(ctx)
+		logger.Info("Log persistence enabled - streaming logs to backend")
 	}
 
 	// Start certificate renewal checker (runs daily)

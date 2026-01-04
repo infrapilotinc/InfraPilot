@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -11,30 +12,133 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	"github.com/infrapilot/backend/internal/enterprise/policy"
 )
 
 // ContainerResponse represents a container in the API response
 type ContainerResponse struct {
-	ID          string   `json:"id"`
-	ContainerID string   `json:"container_id"`
-	Name        string   `json:"name"`
-	Image       string   `json:"image"`
-	Status      string   `json:"status"`
-	State       string   `json:"state"`
-	StackName   string   `json:"stack_name,omitempty"`
-	CPUPercent  float64  `json:"cpu_percent"`
-	MemoryMB    int64    `json:"memory_mb"`
-	Networks    []string `json:"networks"`
-	CreatedAt   string   `json:"created_at"`
+	ID            string   `json:"id"`
+	ContainerID   string   `json:"container_id"`
+	Name          string   `json:"name"`
+	Image         string   `json:"image"`
+	Status        string   `json:"status"`
+	State         string   `json:"state"`
+	StackName     string   `json:"stack_name,omitempty"`
+	CPUPercent    float64  `json:"cpu_percent"`
+	MemoryMB      int64    `json:"memory_mb"`
+	MemoryLimitMB int64    `json:"memory_limit_mb"`
+	Networks      []string `json:"networks"`
+	CreatedAt     string   `json:"created_at"`
+	RestartCount  int      `json:"restart_count"`
 }
 
-// listContainersReal fetches containers from Docker daemon
+// ContainerDetailResponse represents detailed container information
+type ContainerDetailResponse struct {
+	ContainerResponse
+
+	// Ports
+	Ports []PortMapping `json:"ports"`
+
+	// Mounts/Volumes
+	Mounts []MountInfo `json:"mounts"`
+
+	// Environment Variables
+	Environment []EnvVar `json:"environment"`
+
+	// Configuration
+	Config ContainerConfig `json:"config"`
+
+	// Health Check
+	HealthCheck   *HealthCheckConfig `json:"health_check,omitempty"`
+	HealthStatus  string             `json:"health_status,omitempty"`
+	HealthLog     []HealthLogEntry   `json:"health_log,omitempty"`
+
+	// Labels
+	Labels map[string]string `json:"labels"`
+
+	// Network details
+	NetworkDetails []NetworkDetail `json:"network_details"`
+
+	// Resource limits
+	Resources ResourceLimits `json:"resources"`
+}
+
+type PortMapping struct {
+	ContainerPort int    `json:"container_port"`
+	HostPort      int    `json:"host_port"`
+	Protocol      string `json:"protocol"`
+	HostIP        string `json:"host_ip,omitempty"`
+}
+
+type MountInfo struct {
+	Type        string `json:"type"`
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Mode        string `json:"mode"`
+	ReadOnly    bool   `json:"read_only"`
+}
+
+type EnvVar struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type ContainerConfig struct {
+	Hostname      string   `json:"hostname"`
+	Domainname    string   `json:"domainname"`
+	User          string   `json:"user"`
+	WorkingDir    string   `json:"working_dir"`
+	Entrypoint    []string `json:"entrypoint"`
+	Cmd           []string `json:"cmd"`
+	RestartPolicy string   `json:"restart_policy"`
+	Privileged    bool     `json:"privileged"`
+	Tty           bool     `json:"tty"`
+	OpenStdin     bool     `json:"open_stdin"`
+}
+
+type HealthCheckConfig struct {
+	Test        []string `json:"test"`
+	Interval    string   `json:"interval"`
+	Timeout     string   `json:"timeout"`
+	StartPeriod string   `json:"start_period"`
+	Retries     int      `json:"retries"`
+}
+
+type HealthLogEntry struct {
+	Start    string `json:"start"`
+	End      string `json:"end"`
+	ExitCode int    `json:"exit_code"`
+	Output   string `json:"output"`
+}
+
+type NetworkDetail struct {
+	Name       string   `json:"name"`
+	NetworkID  string   `json:"network_id"`
+	IPAddress  string   `json:"ip_address"`
+	Gateway    string   `json:"gateway"`
+	MacAddress string   `json:"mac_address"`
+	Aliases    []string `json:"aliases,omitempty"`
+}
+
+type ResourceLimits struct {
+	CPUShares   int64  `json:"cpu_shares"`
+	CPUQuota    int64  `json:"cpu_quota"`
+	CPUPeriod   int64  `json:"cpu_period"`
+	CPUSetCPUs  string `json:"cpuset_cpus"`
+	MemoryLimit int64  `json:"memory_limit"`
+	MemorySwap  int64  `json:"memory_swap"`
+	PidsLimit   int64  `json:"pids_limit"`
+}
+
+// listContainersReal fetches containers from Docker daemon with real-time stats
 // NOTE: This is for local development only. In production, this should
 // query the database which is populated by the agent via gRPC.
 func (h *Handler) listContainersReal(c *gin.Context) {
 	// agentID := c.Param("id") // Would use this to route to correct agent
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
 	// Connect to local Docker daemon
@@ -84,22 +188,98 @@ func (h *Handler) listContainersReal(c *gin.Context) {
 			networks = append(networks, netName)
 		}
 
+		// Get real CPU/memory stats for running containers
+		var cpuPercent float64
+		var memoryMB int64
+		var memoryLimitMB int64
+		var restartCount int
+
+		if ctr.State == "running" {
+			cpuPercent, memoryMB, memoryLimitMB = getContainerStats(ctx, cli, ctr.ID)
+		}
+
+		// Get restart count from inspect
+		inspect, err := cli.ContainerInspect(ctx, ctr.ID)
+		if err == nil {
+			restartCount = inspect.RestartCount
+		}
+
 		result = append(result, ContainerResponse{
-			ID:          ctr.ID,
-			ContainerID: ctr.ID,
-			Name:        name,
-			Image:       ctr.Image,
-			Status:      status,
-			State:       ctr.State,
-			StackName:   stackName,
-			CPUPercent:  0, // Would need stats API for real values
-			MemoryMB:    0, // Would need stats API for real values
-			Networks:    networks,
-			CreatedAt:   time.Unix(ctr.Created, 0).Format(time.RFC3339),
+			ID:            ctr.ID,
+			ContainerID:   ctr.ID,
+			Name:          name,
+			Image:         ctr.Image,
+			Status:        status,
+			State:         ctr.State,
+			StackName:     stackName,
+			CPUPercent:    cpuPercent,
+			MemoryMB:      memoryMB,
+			MemoryLimitMB: memoryLimitMB,
+			Networks:      networks,
+			CreatedAt:     time.Unix(ctr.Created, 0).Format(time.RFC3339),
+			RestartCount:  restartCount,
 		})
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+// getContainerStats fetches CPU and memory stats for a container
+func getContainerStats(ctx context.Context, cli *client.Client, containerID string) (cpuPercent float64, memoryMB int64, memoryLimitMB int64) {
+	statsCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	stats, err := cli.ContainerStatsOneShot(statsCtx, containerID)
+	if err != nil {
+		return 0, 0, 0
+	}
+	defer stats.Body.Close()
+
+	// Parse stats JSON
+	var statsJSON ContainerStatsJSON
+	if err := json.NewDecoder(stats.Body).Decode(&statsJSON); err != nil {
+		return 0, 0, 0
+	}
+
+	// Calculate CPU percentage
+	cpuDelta := float64(statsJSON.CPUStats.CPUUsage.TotalUsage - statsJSON.PreCPUStats.CPUUsage.TotalUsage)
+	systemDelta := float64(statsJSON.CPUStats.SystemCPUUsage - statsJSON.PreCPUStats.SystemCPUUsage)
+	numCPUs := float64(statsJSON.CPUStats.OnlineCPUs)
+	if numCPUs == 0 {
+		numCPUs = float64(len(statsJSON.CPUStats.CPUUsage.PercpuUsage))
+	}
+
+	if systemDelta > 0 && cpuDelta > 0 {
+		cpuPercent = (cpuDelta / systemDelta) * numCPUs * 100.0
+	}
+
+	// Calculate memory in MB
+	memoryMB = int64(statsJSON.MemoryStats.Usage / (1024 * 1024))
+	memoryLimitMB = int64(statsJSON.MemoryStats.Limit / (1024 * 1024))
+
+	return cpuPercent, memoryMB, memoryLimitMB
+}
+
+// ContainerStatsJSON represents Docker stats response
+type ContainerStatsJSON struct {
+	CPUStats struct {
+		CPUUsage struct {
+			TotalUsage  uint64   `json:"total_usage"`
+			PercpuUsage []uint64 `json:"percpu_usage"`
+		} `json:"cpu_usage"`
+		SystemCPUUsage uint64 `json:"system_cpu_usage"`
+		OnlineCPUs     int    `json:"online_cpus"`
+	} `json:"cpu_stats"`
+	PreCPUStats struct {
+		CPUUsage struct {
+			TotalUsage uint64 `json:"total_usage"`
+		} `json:"cpu_usage"`
+		SystemCPUUsage uint64 `json:"system_cpu_usage"`
+	} `json:"precpu_stats"`
+	MemoryStats struct {
+		Usage uint64 `json:"usage"`
+		Limit uint64 `json:"limit"`
+	} `json:"memory_stats"`
 }
 
 // getDockerClient creates a Docker client for local development
@@ -107,9 +287,74 @@ func getDockerClient() (*client.Client, error) {
 	return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 }
 
+// evaluateContainerPolicy checks policies before container actions
+func (h *Handler) evaluateContainerPolicy(c *gin.Context, containerID string, action string) (bool, string) {
+	// Get org ID from context
+	orgIDVal, exists := c.Get("org_id")
+	if !exists {
+		// No org context, skip policy evaluation
+		return false, ""
+	}
+	orgID, ok := orgIDVal.(uuid.UUID)
+	if !ok {
+		return false, ""
+	}
+
+	// Get container details for policy evaluation
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	cli, err := getDockerClient()
+	if err != nil {
+		return false, ""
+	}
+	defer cli.Close()
+
+	inspect, err := cli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return false, ""
+	}
+
+	// Build resource for policy evaluation
+	resource := policy.Resource{
+		Type: "container",
+		ID:   containerID,
+		Attributes: map[string]interface{}{
+			"name":       strings.TrimPrefix(inspect.Name, "/"),
+			"image":      inspect.Config.Image,
+			"user":       inspect.Config.User,
+			"privileged": inspect.HostConfig.Privileged,
+			"action":     action,
+			"state":      inspect.State.Status,
+			"labels":     inspect.Config.Labels,
+		},
+	}
+
+	// Evaluate policies
+	evaluator := policy.NewEvaluator(h.db, h.logger)
+	blocked, message, err := evaluator.EvaluateAndBlock(ctx, orgID, resource)
+	if err != nil {
+		h.logger.Warn("Policy evaluation failed",
+			// Log but don't block on evaluation errors
+		)
+		return false, ""
+	}
+
+	return blocked, message
+}
+
 // startContainerReal starts a Docker container
 func (h *Handler) startContainerReal(c *gin.Context) {
 	containerID := c.Param("cid")
+
+	// Check policies before action
+	if blocked, message := h.evaluateContainerPolicy(c, containerID, "start"); blocked {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Action blocked by policy",
+			"message": message,
+		})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
@@ -132,6 +377,15 @@ func (h *Handler) startContainerReal(c *gin.Context) {
 // stopContainerReal stops a Docker container
 func (h *Handler) stopContainerReal(c *gin.Context) {
 	containerID := c.Param("cid")
+
+	// Check policies before action
+	if blocked, message := h.evaluateContainerPolicy(c, containerID, "stop"); blocked {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Action blocked by policy",
+			"message": message,
+		})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
@@ -156,6 +410,15 @@ func (h *Handler) stopContainerReal(c *gin.Context) {
 func (h *Handler) restartContainerReal(c *gin.Context) {
 	containerID := c.Param("cid")
 
+	// Check policies before action
+	if blocked, message := h.evaluateContainerPolicy(c, containerID, "restart"); blocked {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Action blocked by policy",
+			"message": message,
+		})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
@@ -173,6 +436,83 @@ func (h *Handler) restartContainerReal(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "container restarted", "container_id": containerID})
+}
+
+// deleteContainerReal removes a Docker container
+func (h *Handler) deleteContainerReal(c *gin.Context) {
+	containerID := c.Param("cid")
+
+	// Check policies before action
+	if blocked, message := h.evaluateContainerPolicy(c, containerID, "delete"); blocked {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Action blocked by policy",
+			"message": message,
+		})
+		return
+	}
+
+	// Require confirmation name in request body
+	var req struct {
+		ConfirmName string `json:"confirm_name" binding:"required"`
+		Force       bool   `json:"force"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "confirm_name is required"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	cli, err := getDockerClient()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to connect to Docker"})
+		return
+	}
+	defer cli.Close()
+
+	// Get container info to verify name
+	info, err := cli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "container not found"})
+		return
+	}
+
+	containerName := strings.TrimPrefix(info.Name, "/")
+	if req.ConfirmName != containerName {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":         "container name does not match",
+			"expected_name": containerName,
+		})
+		return
+	}
+
+	// Stop container first if running and force is true
+	if info.State.Running && req.Force {
+		timeout := 10
+		if err := cli.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop container: " + err.Error()})
+			return
+		}
+	} else if info.State.Running {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "container is running, set force=true to stop and delete"})
+		return
+	}
+
+	// Remove container
+	if err := cli.ContainerRemove(ctx, containerID, container.RemoveOptions{
+		RemoveVolumes: false, // Don't remove volumes by default for safety
+		Force:         req.Force,
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete container: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":      "container deleted",
+		"container_id": containerID,
+		"name":         containerName,
+	})
 }
 
 // getContainerLogsReal fetches logs from a Docker container
@@ -227,11 +567,11 @@ func (h *Handler) getContainerLogsReal(c *gin.Context) {
 	})
 }
 
-// getContainerReal fetches details for a single container
+// getContainerReal fetches detailed info for a single container
 func (h *Handler) getContainerReal(c *gin.Context) {
 	containerID := c.Param("cid")
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
 
 	cli, err := getDockerClient()
@@ -259,16 +599,157 @@ func (h *Handler) getContainerReal(c *gin.Context) {
 		stackName = project
 	}
 
-	response := ContainerResponse{
-		ID:          info.ID,
-		ContainerID: info.ID,
-		Name:        strings.TrimPrefix(info.Name, "/"),
-		Image:       info.Config.Image,
-		Status:      info.State.Status,
-		State:       info.State.Status,
-		StackName:   stackName,
-		Networks:    networks,
-		CreatedAt:   info.Created,
+	// Get stats if running
+	var cpuPercent float64
+	var memoryMB, memoryLimitMB int64
+	if info.State.Running {
+		cpuPercent, memoryMB, memoryLimitMB = getContainerStats(ctx, cli, containerID)
+	}
+
+	// Parse ports
+	ports := make([]PortMapping, 0)
+	for portProto, bindings := range info.NetworkSettings.Ports {
+		parts := strings.Split(string(portProto), "/")
+		containerPort, _ := strconv.Atoi(parts[0])
+		protocol := "tcp"
+		if len(parts) > 1 {
+			protocol = parts[1]
+		}
+
+		for _, binding := range bindings {
+			hostPort, _ := strconv.Atoi(binding.HostPort)
+			ports = append(ports, PortMapping{
+				ContainerPort: containerPort,
+				HostPort:      hostPort,
+				Protocol:      protocol,
+				HostIP:        binding.HostIP,
+			})
+		}
+	}
+
+	// Parse mounts
+	mounts := make([]MountInfo, 0)
+	for _, m := range info.Mounts {
+		mounts = append(mounts, MountInfo{
+			Type:        string(m.Type),
+			Source:      m.Source,
+			Destination: m.Destination,
+			Mode:        m.Mode,
+			ReadOnly:    !m.RW,
+		})
+	}
+
+	// Parse environment variables
+	environment := make([]EnvVar, 0)
+	for _, env := range info.Config.Env {
+		parts := strings.SplitN(env, "=", 2)
+		key := parts[0]
+		value := ""
+		if len(parts) > 1 {
+			value = parts[1]
+		}
+		environment = append(environment, EnvVar{
+			Key:   key,
+			Value: value,
+		})
+	}
+
+	// Build config
+	restartPolicy := info.HostConfig.RestartPolicy.Name
+	config := ContainerConfig{
+		Hostname:      info.Config.Hostname,
+		Domainname:    info.Config.Domainname,
+		User:          info.Config.User,
+		WorkingDir:    info.Config.WorkingDir,
+		Entrypoint:    info.Config.Entrypoint,
+		Cmd:           info.Config.Cmd,
+		RestartPolicy: string(restartPolicy),
+		Privileged:    info.HostConfig.Privileged,
+		Tty:           info.Config.Tty,
+		OpenStdin:     info.Config.OpenStdin,
+	}
+
+	// Parse health check
+	var healthCheck *HealthCheckConfig
+	if info.Config.Healthcheck != nil && len(info.Config.Healthcheck.Test) > 0 {
+		healthCheck = &HealthCheckConfig{
+			Test:        info.Config.Healthcheck.Test,
+			Interval:    info.Config.Healthcheck.Interval.String(),
+			Timeout:     info.Config.Healthcheck.Timeout.String(),
+			StartPeriod: info.Config.Healthcheck.StartPeriod.String(),
+			Retries:     info.Config.Healthcheck.Retries,
+		}
+	}
+
+	// Health status and log
+	healthStatus := ""
+	healthLog := make([]HealthLogEntry, 0)
+	if info.State.Health != nil {
+		healthStatus = info.State.Health.Status
+		for _, entry := range info.State.Health.Log {
+			healthLog = append(healthLog, HealthLogEntry{
+				Start:    entry.Start.Format(time.RFC3339),
+				End:      entry.End.Format(time.RFC3339),
+				ExitCode: entry.ExitCode,
+				Output:   entry.Output,
+			})
+		}
+	}
+
+	// Network details
+	networkDetails := make([]NetworkDetail, 0)
+	for netName, netSettings := range info.NetworkSettings.Networks {
+		networkDetails = append(networkDetails, NetworkDetail{
+			Name:       netName,
+			NetworkID:  netSettings.NetworkID,
+			IPAddress:  netSettings.IPAddress,
+			Gateway:    netSettings.Gateway,
+			MacAddress: netSettings.MacAddress,
+			Aliases:    netSettings.Aliases,
+		})
+	}
+
+	// Resource limits
+	var pidsLimit int64
+	if info.HostConfig.PidsLimit != nil {
+		pidsLimit = *info.HostConfig.PidsLimit
+	}
+	resources := ResourceLimits{
+		CPUShares:   info.HostConfig.CPUShares,
+		CPUQuota:    info.HostConfig.CPUQuota,
+		CPUPeriod:   info.HostConfig.CPUPeriod,
+		CPUSetCPUs:  info.HostConfig.CpusetCpus,
+		MemoryLimit: info.HostConfig.Memory,
+		MemorySwap:  info.HostConfig.MemorySwap,
+		PidsLimit:   pidsLimit,
+	}
+
+	response := ContainerDetailResponse{
+		ContainerResponse: ContainerResponse{
+			ID:            info.ID,
+			ContainerID:   info.ID,
+			Name:          strings.TrimPrefix(info.Name, "/"),
+			Image:         info.Config.Image,
+			Status:        info.State.Status,
+			State:         info.State.Status,
+			StackName:     stackName,
+			CPUPercent:    cpuPercent,
+			MemoryMB:      memoryMB,
+			MemoryLimitMB: memoryLimitMB,
+			Networks:      networks,
+			CreatedAt:     info.Created,
+			RestartCount:  info.RestartCount,
+		},
+		Ports:          ports,
+		Mounts:         mounts,
+		Environment:    environment,
+		Config:         config,
+		HealthCheck:    healthCheck,
+		HealthStatus:   healthStatus,
+		HealthLog:      healthLog,
+		Labels:         info.Config.Labels,
+		NetworkDetails: networkDetails,
+		Resources:      resources,
 	}
 
 	c.JSON(http.StatusOK, response)

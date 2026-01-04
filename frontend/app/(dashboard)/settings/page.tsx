@@ -19,8 +19,22 @@ import {
   Trash2,
   Loader2,
   RefreshCw,
+  Crown,
+  Sparkles,
+  Clock,
+  Plus,
+  Users,
+  KeyRound,
+  Building2,
+  FileText,
+  Download,
+  Play,
+  Archive,
+  FileCheck,
+  Send,
+  ShieldCheck,
 } from "lucide-react";
-import { api, Agent, User, MFASetupResponse, InfraPilotDomainSettings } from "@/lib/api";
+import { api, Agent, User, MFASetupResponse, InfraPilotDomainSettings, LicenseInfo, SSOProvider, SSOProviderType, CreateSSOProviderRequest, AuditConfig, AuditExport, ComplianceReport } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/lib/auth";
 
@@ -513,6 +527,102 @@ function NginxConfigSection({ agentId }: { agentId: string | null }) {
   );
 }
 
+// Edition Section - Community OSS
+function LicenseSection() {
+  const features = [
+    { name: "Proxy Management", description: "Nginx reverse proxy with SSL automation" },
+    { name: "Container Operations", description: "Docker management with real-time stats" },
+    { name: "Unified Logs", description: "Multi-container log aggregation" },
+    { name: "Alerts & Notifications", description: "Slack, email, webhook alerts" },
+    { name: "User Management", description: "RBAC with MFA support" },
+    { name: "Health Monitoring", description: "TLS, database, and system health" },
+  ];
+
+  return (
+    <section className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
+      <div className="flex items-center gap-3 mb-6">
+        <div className="p-2 rounded-lg bg-green-500/10">
+          <Sparkles className="h-5 w-5 text-green-400" />
+        </div>
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Community Edition</h2>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Open source with all features included
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        {/* Status Card */}
+        <div className="p-4 rounded-lg border bg-green-500/5 border-green-500/30">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-3 h-3 rounded-full bg-green-500" />
+              <div>
+                <span className="font-semibold text-gray-900 dark:text-white">
+                  InfraPilot Community
+                </span>
+                <p className="text-sm text-gray-500 mt-0.5">Apache 2.0 License</p>
+              </div>
+            </div>
+            <span className="px-2 py-1 text-xs bg-green-500/10 text-green-400 border border-green-500/30 rounded">
+              All Features Included
+            </span>
+          </div>
+        </div>
+
+        {/* Features Grid */}
+        <div>
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Available Features</h3>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {features.map((feature) => (
+              <div
+                key={feature.name}
+                className="p-3 rounded-lg border bg-green-500/5 border-green-500/20"
+              >
+                <div className="flex items-start gap-2">
+                  <Check className="h-4 w-4 text-green-400 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">
+                      {feature.name}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">{feature.description}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* GitHub Link */}
+        <div className="p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-lg">
+          <div className="flex items-center justify-between">
+            <div>
+              <h4 className="font-medium text-gray-900 dark:text-white">Open Source</h4>
+              <p className="text-sm text-gray-500 mt-1">
+                Contribute, report issues, or star the project
+              </p>
+            </div>
+            <a
+              href="https://github.com/devsimplex-org/infrapilot"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-2 bg-gray-900 dark:bg-white dark:text-gray-900 text-white rounded-lg transition-colors flex items-center gap-2 text-sm hover:bg-gray-800 dark:hover:bg-gray-100"
+            >
+              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
+              </svg>
+              GitHub
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+
 // MFA Setup Component
 function MFASection() {
   const queryClient = useQueryClient();
@@ -838,43 +948,6 @@ function MFASection() {
 }
 
 export default function SettingsPage() {
-  const queryClient = useQueryClient();
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
-  const [proxyMode, setProxyMode] = useState<ProxyMode>("managed");
-  const [externalProxyType, setExternalProxyType] = useState<string>("");
-  const [hasChanges, setHasChanges] = useState(false);
-
-  // Fetch agents
-  const { data: agents } = useQuery({
-    queryKey: ["agents"],
-    queryFn: () => api.getAgents(),
-  });
-
-  const activeAgents = agents?.filter((a) => a.status === "active") || [];
-
-  // Auto-select first active agent
-  if (!selectedAgent && activeAgents.length > 0) {
-    setSelectedAgent(activeAgents[0].id);
-  }
-
-  // In a full implementation, we'd fetch/save proxy settings via API
-  // For now, this is a UI demonstration
-
-  const handleModeChange = (mode: ProxyMode) => {
-    setProxyMode(mode);
-    setHasChanges(true);
-  };
-
-  const handleSave = () => {
-    // TODO: Save to backend via API
-    console.log("Saving proxy settings:", {
-      agent_id: selectedAgent,
-      proxy_mode: proxyMode,
-      external_proxy_type: externalProxyType,
-    });
-    setHasChanges(false);
-  };
-
   return (
     <div className="max-w-4xl">
       <div className="mb-8">
@@ -884,239 +957,15 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      {/* InfraPilot Domain Section */}
+      {/* License Section */}
       <div className="mb-8">
-        <InfraPilotDomainSection />
+        <LicenseSection />
       </div>
 
       {/* Security Section - MFA */}
       <div className="mb-8">
         <MFASection />
       </div>
-
-      {/* Agent selector */}
-      <div className="mb-8">
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-          Select Agent
-        </label>
-        <select
-          value={selectedAgent || ""}
-          onChange={(e) => setSelectedAgent(e.target.value || null)}
-          className="w-full max-w-xs px-4 py-2 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500"
-        >
-          <option value="">Select an agent...</option>
-          {agents?.map((agent) => (
-            <option
-              key={agent.id}
-              value={agent.id}
-              disabled={agent.status !== "active"}
-            >
-              {agent.name} ({agent.status})
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {selectedAgent && (
-        <div className="space-y-8">
-          {/* Proxy Settings Section */}
-          <section className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="p-2 bg-primary-500/10 rounded-lg">
-                <Network className="h-5 w-5 text-primary-400" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Reverse Proxy</h2>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Choose how InfraPilot manages your reverse proxy
-                </p>
-              </div>
-            </div>
-
-            {/* Proxy Mode Toggle */}
-            <div className="space-y-4">
-              {/* Managed Mode */}
-              <label
-                className={cn(
-                  "flex items-start gap-4 p-4 rounded-lg border-2 cursor-pointer transition-colors",
-                  proxyMode === "managed"
-                    ? "border-primary-500 bg-primary-500/5"
-                    : "border-gray-300 dark:border-gray-700 hover:border-gray-600"
-                )}
-              >
-                <input
-                  type="radio"
-                  name="proxy_mode"
-                  value="managed"
-                  checked={proxyMode === "managed"}
-                  onChange={() => handleModeChange("managed")}
-                  className="mt-1 w-4 h-4 text-primary-600 focus:ring-primary-500"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-gray-900 dark:text-white">
-                      Use InfraPilot Managed Proxy
-                    </span>
-                    <span className="px-2 py-0.5 text-xs bg-green-500/10 text-green-400 border border-green-500/30 rounded">
-                      Recommended
-                    </span>
-                  </div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                    InfraPilot runs and fully manages NGINX for you. Automatic config
-                    generation, zero-downtime reloads, and built-in SSL with Let's Encrypt.
-                  </p>
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    <span className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded">
-                      Auto config
-                    </span>
-                    <span className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded">
-                      Auto SSL
-                    </span>
-                    <span className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded">
-                      Zero-downtime reloads
-                    </span>
-                    <span className="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded">
-                      No setup required
-                    </span>
-                  </div>
-                </div>
-              </label>
-
-              {/* External Mode */}
-              <label
-                className={cn(
-                  "flex items-start gap-4 p-4 rounded-lg border-2 cursor-pointer transition-colors",
-                  proxyMode === "external"
-                    ? "border-primary-500 bg-primary-500/5"
-                    : "border-gray-300 dark:border-gray-700 hover:border-gray-600"
-                )}
-              >
-                <input
-                  type="radio"
-                  name="proxy_mode"
-                  value="external"
-                  checked={proxyMode === "external"}
-                  onChange={() => handleModeChange("external")}
-                  className="mt-1 w-4 h-4 text-primary-600 focus:ring-primary-500"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-gray-900 dark:text-white">
-                      I already have my own reverse proxy
-                    </span>
-                  </div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                    Use your existing NGINX, Traefik, Caddy, HAProxy, or cloud load balancer.
-                    InfraPilot will NOT manage configs, reloads, or TLS.
-                  </p>
-
-                  {proxyMode === "external" && (
-                    <div className="mt-4 space-y-4">
-                      <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-                        <div className="flex items-start gap-2">
-                          <AlertTriangle className="h-4 w-4 text-yellow-400 mt-0.5 flex-shrink-0" />
-                          <div className="text-sm text-yellow-300">
-                            <p className="font-medium">You are responsible for:</p>
-                            <ul className="mt-1 list-disc list-inside text-yellow-400/80">
-                              <li>Configuring your proxy to route traffic</li>
-                              <li>Managing SSL/TLS certificates</li>
-                              <li>Reloading your proxy after changes</li>
-                              <li>Network connectivity between proxy and services</li>
-                            </ul>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                          What proxy are you using? (optional)
-                        </label>
-                        <select
-                          value={externalProxyType}
-                          onChange={(e) => {
-                            setExternalProxyType(e.target.value);
-                            setHasChanges(true);
-                          }}
-                          className="w-full max-w-xs px-4 py-2 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500"
-                        >
-                          <option value="">Select...</option>
-                          <option value="nginx">NGINX</option>
-                          <option value="nginx-proxy-manager">NGINX Proxy Manager</option>
-                          <option value="traefik">Traefik</option>
-                          <option value="caddy">Caddy</option>
-                          <option value="haproxy">HAProxy</option>
-                          <option value="aws-alb">AWS ALB</option>
-                          <option value="cloudflare">Cloudflare</option>
-                          <option value="other">Other</option>
-                        </select>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </label>
-            </div>
-
-            {/* Save Button */}
-            {hasChanges && (
-              <div className="mt-6 flex justify-end">
-                <button
-                  onClick={handleSave}
-                  className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-gray-900 dark:text-white rounded-lg transition-colors flex items-center gap-2"
-                >
-                  <Check className="h-4 w-4" />
-                  Save Changes
-                </button>
-              </div>
-            )}
-          </section>
-
-          {/* Info Section */}
-          <section className="bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-800 p-6">
-            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-              Need help deciding?
-            </h3>
-            <div className="grid md:grid-cols-2 gap-4 text-sm">
-              <div className="space-y-2">
-                <p className="text-gray-600 dark:text-gray-400">
-                  <strong className="text-gray-900 dark:text-white">Choose Managed Proxy if:</strong>
-                </p>
-                <ul className="list-disc list-inside text-gray-500 space-y-1">
-                  <li>You want things to just work</li>
-                  <li>You don't have an existing proxy setup</li>
-                  <li>You want automatic HTTPS</li>
-                  <li>You prefer a simple UI for routing</li>
-                </ul>
-              </div>
-              <div className="space-y-2">
-                <p className="text-gray-600 dark:text-gray-400">
-                  <strong className="text-gray-900 dark:text-white">Choose External Proxy if:</strong>
-                </p>
-                <ul className="list-disc list-inside text-gray-500 space-y-1">
-                  <li>You already have infrastructure</li>
-                  <li>You need custom proxy configuration</li>
-                  <li>You have compliance/security requirements</li>
-                  <li>You're using a cloud load balancer</li>
-                </ul>
-              </div>
-            </div>
-          </section>
-
-          {/* Nginx Configuration Section */}
-          <NginxConfigSection agentId={selectedAgent} />
-        </div>
-      )}
-
-      {!selectedAgent && (
-        <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 py-12 text-center text-gray-500">
-          <Server className="h-12 w-12 mx-auto mb-4 opacity-50" />
-          <p>Select an agent to configure settings</p>
-          {activeAgents.length === 0 && (
-            <p className="text-sm mt-1">
-              No active agents available. Register an agent first.
-            </p>
-          )}
-        </div>
-      )}
     </div>
   );
 }

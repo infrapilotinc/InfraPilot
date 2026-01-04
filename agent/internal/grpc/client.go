@@ -3,11 +3,14 @@ package grpc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/url"
 	"os"
 	"runtime"
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -23,6 +26,7 @@ type Client struct {
 	logger          *zap.Logger
 	enrollmentToken string
 	agentID         string
+	backendAddr     string // Backend gRPC/WS address (e.g., "backend:9090")
 
 	// Command stream
 	sendCh   chan *AgentMessage
@@ -80,6 +84,7 @@ func NewClient(addr, enrollmentToken string, logger *zap.Logger) (*Client, error
 		conn:            conn,
 		logger:          logger,
 		enrollmentToken: enrollmentToken,
+		backendAddr:     addr,
 		sendCh:          make(chan *AgentMessage, 100),
 		recvCh:          make(chan *BackendMessage, 100),
 	}, nil
@@ -154,74 +159,163 @@ func (c *Client) Heartbeat(ctx context.Context, agentID string, sysMetrics *metr
 }
 
 // ConnectCommandStream establishes a bidirectional command stream with the backend
-// This simulates what would be a real gRPC streaming connection
+// Uses WebSocket for real-time communication
 func (c *Client) ConnectCommandStream(ctx context.Context, handler CommandHandler) error {
-	c.logger.Info("Connecting command stream", zap.String("agent_id", c.agentID))
+	c.logger.Info("Connecting command stream via WebSocket", zap.String("agent_id", c.agentID))
 
-	// In production, this would use actual gRPC streaming:
-	// stream, err := c.client.CommandStream(ctx)
-	// For now, we simulate with polling and WebSocket-like behavior
+	// Build WebSocket URL from backend address
+	// The backend HTTP server typically runs on port 8080, gRPC on 9090
+	// We connect to the HTTP server's WebSocket endpoint
+	backendHTTPURL := os.Getenv("BACKEND_HTTP_URL")
+	if backendHTTPURL == "" {
+		backendHTTPURL = "http://backend:8080"
+	}
 
-	// Start goroutine to process incoming commands
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				c.logger.Info("Command stream context cancelled")
-				return
-			case cmd, ok := <-c.recvCh:
-				if !ok {
-					c.logger.Info("Command receive channel closed")
-					return
-				}
+	// Parse URL and convert to WebSocket
+	parsedURL, err := url.Parse(backendHTTPURL)
+	if err != nil {
+		return fmt.Errorf("failed to parse backend URL: %w", err)
+	}
 
-				c.logger.Debug("Received command",
-					zap.String("request_id", cmd.RequestId),
-					zap.String("type", cmd.Type),
-				)
+	wsScheme := "ws"
+	if parsedURL.Scheme == "https" {
+		wsScheme = "wss"
+	}
+	wsURL := fmt.Sprintf("%s://%s/api/v1/agents/%s/ws/commands", wsScheme, parsedURL.Host, c.agentID)
 
-				// Process command in separate goroutine
-				go func(cmd *BackendMessage) {
-					result := handler.HandleCommand(ctx, cmd)
-					c.SendResponse(cmd.RequestId, result)
-				}(cmd)
-			}
-		}
-	}()
+	c.logger.Info("Connecting to WebSocket", zap.String("url", wsURL))
 
-	// Start goroutine to send responses
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case msg, ok := <-c.sendCh:
-				if !ok {
-					return
-				}
-
-				// In production, this would send via gRPC stream
-				c.logger.Debug("Sending response",
-					zap.String("request_id", msg.RequestId),
-				)
-
-				// Simulate sending (in production: stream.Send(msg))
-				_ = msg
-			}
-		}
-	}()
-
-	// Keep connection alive with heartbeats
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
+	// Connection retry loop
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			c.logger.Debug("Command stream heartbeat")
+		default:
 		}
+
+		// Connect to WebSocket
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+		if err != nil {
+			c.logger.Error("WebSocket connection failed, retrying in 5s",
+				zap.Error(err),
+				zap.String("url", wsURL),
+			)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+				continue
+			}
+		}
+
+		c.logger.Info("WebSocket connected successfully", zap.String("agent_id", c.agentID))
+
+		// Handle the connection
+		err = c.handleWebSocketConnection(ctx, conn, handler)
+		conn.Close()
+
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			c.logger.Error("WebSocket connection lost, reconnecting in 5s", zap.Error(err))
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+				continue
+			}
+		}
+	}
+}
+
+// handleWebSocketConnection manages a single WebSocket connection
+func (c *Client) handleWebSocketConnection(ctx context.Context, conn *websocket.Conn, handler CommandHandler) error {
+	// Channel for coordinating goroutines
+	done := make(chan error, 2)
+
+	// Start goroutine to read commands from WebSocket
+	go func() {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				done <- fmt.Errorf("read error: %w", err)
+				return
+			}
+
+			var cmd BackendMessage
+			if err := json.Unmarshal(msg, &cmd); err != nil {
+				c.logger.Error("Failed to unmarshal command", zap.Error(err))
+				continue
+			}
+
+			c.logger.Info("Received command from backend",
+				zap.String("request_id", cmd.RequestId),
+				zap.String("type", cmd.Type),
+			)
+
+			// Process command and send response
+			go func(cmd BackendMessage) {
+				result := handler.HandleCommand(ctx, &cmd)
+
+				response := AgentMessage{
+					RequestId: cmd.RequestId,
+					Response:  result,
+				}
+
+				data, err := json.Marshal(response)
+				if err != nil {
+					c.logger.Error("Failed to marshal response", zap.Error(err))
+					return
+				}
+
+				c.streamMu.Lock()
+				err = conn.WriteMessage(websocket.TextMessage, data)
+				c.streamMu.Unlock()
+
+				if err != nil {
+					c.logger.Error("Failed to send response", zap.Error(err))
+					return
+				}
+
+				c.logger.Info("Sent response to backend",
+					zap.String("request_id", cmd.RequestId),
+					zap.Bool("success", result.Success),
+				)
+			}(cmd)
+		}
+	}()
+
+	// Start goroutine to send ping/keepalive
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				done <- ctx.Err()
+				return
+			case <-ticker.C:
+				c.streamMu.Lock()
+				err := conn.WriteMessage(websocket.PingMessage, nil)
+				c.streamMu.Unlock()
+
+				if err != nil {
+					done <- fmt.Errorf("ping error: %w", err)
+					return
+				}
+				c.logger.Debug("WebSocket ping sent")
+			}
+		}
+	}()
+
+	// Wait for error or context cancellation
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

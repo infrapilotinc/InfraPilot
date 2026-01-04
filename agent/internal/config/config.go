@@ -16,6 +16,8 @@ type Config struct {
 	CertPath           string
 	KeyPath            string
 	ProxyMode          string // "managed" (default) or "external"
+	DataDir            string // Directory for agent data (credentials, state)
+	LogPersistence     bool   // Enable log persistence (stream logs to backend)
 
 	// SSL/ACME settings
 	LetsEncryptDir   string // Directory for Let's Encrypt certs
@@ -40,6 +42,9 @@ func Load() (*Config, error) {
 		CertPath:           getEnv("CERT_PATH", ""),
 		KeyPath:            getEnv("KEY_PATH", ""),
 		ProxyMode:          getEnv("PROXY_MODE", "managed"), // "managed" or "external"
+		DataDir:            getEnv("DATA_DIR", "/var/lib/infrapilot-agent"),
+
+		LogPersistence: getEnvBool("LOG_PERSISTENCE", false),
 
 		// SSL/ACME settings
 		LetsEncryptDir:   getEnv("LETSENCRYPT_DIR", "/etc/letsencrypt"),

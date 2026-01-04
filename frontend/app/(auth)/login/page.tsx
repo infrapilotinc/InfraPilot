@@ -2,8 +2,10 @@
 
 import { Suspense, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@/lib/auth";
-import { api } from "@/lib/api";
+import { api, SSOPublicProvider, SSOProviderType } from "@/lib/api";
+import { Shield, KeyRound, Building2 } from "lucide-react";
 
 function MFAForm({ onCancel }: { onCancel: () => void }) {
   const router = useRouter();
@@ -101,6 +103,12 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   const [checkingSetup, setCheckingSetup] = useState(true);
 
+  // Fetch SSO providers
+  const { data: ssoProviders } = useQuery({
+    queryKey: ["sso-public-providers"],
+    queryFn: () => api.getPublicSSOProviders(),
+  });
+
   // Check if setup is required on mount
   useEffect(() => {
     const checkSetup = async () => {
@@ -118,6 +126,29 @@ function LoginForm() {
     };
     checkSetup();
   }, [router]);
+
+  const getSSOIcon = (type: SSOProviderType) => {
+    switch (type) {
+      case "saml": return <Shield className="h-5 w-5" />;
+      case "oidc": return <KeyRound className="h-5 w-5" />;
+      case "ldap": return <Building2 className="h-5 w-5" />;
+    }
+  };
+
+  const handleSSOLogin = (provider: SSOPublicProvider) => {
+    const returnTo = searchParams.get("redirect") || "/";
+    if (provider.provider_type === "ldap") {
+      // LDAP requires username/password, show a different form
+      // For now, just alert
+      alert("LDAP login requires username and password. Configure LDAP authentication in settings.");
+      return;
+    }
+    // Redirect to SSO authorize endpoint
+    const authUrl = provider.provider_type === "oidc"
+      ? `/api/v1/auth/oidc/authorize?provider_id=${provider.id}&return_to=${encodeURIComponent(returnTo)}`
+      : `/api/v1/auth/saml/authorize?provider_id=${provider.id}&return_to=${encodeURIComponent(returnTo)}`;
+    window.location.href = authUrl;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -211,6 +242,34 @@ function LoginForm() {
           {loading ? "Signing in..." : "Sign in"}
         </button>
       </form>
+
+      {/* SSO Providers */}
+      {ssoProviders && ssoProviders.length > 0 && (
+        <div className="mt-6">
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-300 dark:border-gray-700" />
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-white dark:bg-gray-900 text-gray-500">or continue with</span>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-2">
+            {ssoProviders.map((provider) => (
+              <button
+                key={provider.id}
+                type="button"
+                onClick={() => handleSSOLogin(provider)}
+                className="w-full py-3 px-4 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-lg transition-colors flex items-center justify-center gap-3"
+              >
+                {getSSOIcon(provider.provider_type)}
+                Sign in with {provider.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

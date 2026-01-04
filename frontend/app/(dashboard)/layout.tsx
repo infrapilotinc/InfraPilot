@@ -10,7 +10,6 @@ import {
   Bell,
   Settings,
   LogOut,
-  History,
   Users,
   Menu,
   X,
@@ -29,7 +28,6 @@ const navigation = [
   { name: "Alerts", href: "/alerts", icon: Bell },
   { name: "Health", href: "/health", icon: Activity },
   { name: "Users", href: "/users", icon: Users },
-  { name: "Audit Log", href: "/audit", icon: History },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
 
@@ -193,7 +191,7 @@ export default function DashboardLayout({
         </header>
 
         <main className="flex-1 overflow-hidden">
-          <div className="h-full p-4 lg:p-8">{children}</div>
+          <div className="h-full overflow-auto p-4 lg:p-8">{children}</div>
         </main>
       </div>
     </div>

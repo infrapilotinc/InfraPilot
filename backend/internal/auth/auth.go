@@ -121,6 +121,7 @@ func (s *Service) GenerateEnrollmentToken() (string, error) {
 // Role constants
 const (
 	RoleSuperAdmin = "super_admin"
+	RoleAdmin      = "admin"
 	RoleOperator   = "operator"
 	RoleViewer     = "viewer"
 )
