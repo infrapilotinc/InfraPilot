@@ -116,13 +116,12 @@ function LoginForm() {
         const status = await api.getSetupStatus();
         if (status.setup_required) {
           router.replace("/setup");
-          return;
+          return; // keep spinner visible while navigating
         }
       } catch {
         // If setup check fails, allow login attempt
-      } finally {
-        setCheckingSetup(false);
       }
+      setCheckingSetup(false);
     };
     checkSetup();
   }, [router]);

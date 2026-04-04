@@ -126,6 +126,19 @@ export default function DashboardLayout({
       // Check for token in localStorage
       const token = localStorage.getItem("access_token");
       if (!token && !accessToken) {
+        // Check if setup is required before sending to login
+        try {
+          const res = await fetch("/api/v1/setup/status");
+          if (res.ok) {
+            const status = await res.json();
+            if (status.setup_required) {
+              router.replace("/setup");
+              return;
+            }
+          }
+        } catch {
+          // ignore — fall through to login
+        }
         router.replace("/login");
         return;
       }
