@@ -13,7 +13,6 @@ import {
   Settings,
   Layers,
   BarChart3,
-  Lock,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -32,7 +31,7 @@ const tabGroups = [
     tabs: [
       { id: "overview", label: "Overview", href: "/traffic", icon: Layers },
       { id: "resources", label: "Resources", href: "/traffic/resources", icon: Network },
-      { id: "policies", label: "Policies", href: "/traffic/policies", icon: Shield, requiredFeature: "advanced_alerts", tierLabel: "Pro" },
+      { id: "policies", label: "Policies", href: "/traffic/policies", icon: Shield },
     ],
   },
   {
@@ -40,7 +39,7 @@ const tabGroups = [
     label: "Reverse Proxy",
     tabs: [
       { id: "proxies", label: "Proxy Hosts", href: "/traffic/proxies", icon: Globe },
-      { id: "analytics", label: "Analytics", href: "/traffic/analytics", icon: BarChart3, requiredFeature: "advanced_alerts", tierLabel: "Pro" },
+      { id: "analytics", label: "Analytics", href: "/traffic/analytics", icon: BarChart3 },
       { id: "logs", label: "Nginx Logs", href: "/traffic/logs", icon: FileText },
     ],
   },
@@ -66,12 +65,6 @@ export default function TrafficLayout({ children }: { children: ReactNode }) {
   const { data: agents, isLoading: isLoadingAgents } = useQuery({
     queryKey: ["agents"],
     queryFn: () => api.getAgents(),
-  });
-
-  const { data: licenseInfo } = useQuery({
-    queryKey: ["licenseTierInfo"],
-    queryFn: () => api.getLicenseTierInfo(),
-    staleTime: 60 * 1000,
   });
 
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
@@ -223,34 +216,19 @@ export default function TrafficLayout({ children }: { children: ReactNode }) {
                 <div className="flex">
                   {group.tabs.map((tab) => {
                     const Icon = tab.icon;
-                    const isLocked =
-                      !!tab.requiredFeature &&
-                      (!licenseInfo || !licenseInfo.features.includes(tab.requiredFeature));
-
                     return (
                       <button
                         key={tab.id}
-                        onClick={() => router.push(isLocked ? "/settings/license" : tab.href)}
-                        title={isLocked ? `Requires ${tab.tierLabel} — click to manage license` : undefined}
+                        onClick={() => router.push(tab.href)}
                         className={cn(
                           "flex items-center gap-1.5 whitespace-nowrap border-b-2 py-3 px-3 text-sm font-medium transition-colors",
-                          isLocked
-                            ? "border-transparent text-gray-400 dark:text-gray-600 cursor-pointer opacity-70"
-                            : activeTab === tab.id
+                          activeTab === tab.id
                             ? "border-primary-500 text-primary-600 dark:text-primary-400"
                             : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
                         )}
                       >
                         <Icon className="w-4 h-4" />
                         <span>{tab.label}</span>
-                        {isLocked && (
-                          <>
-                            <Lock className="h-3 w-3" />
-                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700">
-                              {tab.tierLabel}
-                            </span>
-                          </>
-                        )}
                       </button>
                     );
                   })}

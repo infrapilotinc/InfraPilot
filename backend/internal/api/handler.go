@@ -14,55 +14,32 @@ import (
 	"github.com/infrapilot/backend/internal/auth"
 	"github.com/infrapilot/backend/internal/config"
 	"github.com/infrapilot/backend/internal/crypto"
-	"github.com/infrapilot/backend/internal/feedback"
 	agentgrpc "github.com/infrapilot/backend/internal/grpc"
 	"github.com/infrapilot/backend/internal/license"
-	"github.com/infrapilot/backend/internal/policy"
-	"github.com/infrapilot/backend/internal/registry"
-	"github.com/infrapilot/backend/internal/scanner"
 	"github.com/infrapilot/backend/internal/webhook"
 )
 
 type Handler struct {
-	db                  *pgxpool.Pool
-	auth                *auth.Service
-	logger              *zap.Logger
-	scanner             *scanner.Scanner
-	sbomGenerator       *scanner.SBOMGenerator
-	policyEngine        *policy.PolicyEngine
-	webhookService      *webhook.Service
-	feedbackIntegration *feedback.DeploymentIntegration
-	registryService     *registry.Service
-	encryptionSvc       *crypto.EncryptionService
-	license             *license.Client
-	cfg                 *config.Config
-	version             string
+	db            *pgxpool.Pool
+	auth          *auth.Service
+	logger        *zap.Logger
+	webhookService *webhook.Service
+	encryptionSvc *crypto.EncryptionService
+	license       *license.Client
+	cfg           *config.Config
+	version       string
 }
 
 func NewHandler(db *pgxpool.Pool, authService *auth.Service, logger *zap.Logger, encryptionSvc *crypto.EncryptionService, licenseClient *license.Client, cfg *config.Config, version string) *Handler {
-	// Initialize feedback system
-	feedbackManager := feedback.NewManager(db, logger)
-	feedbackRenderer := feedback.NewTemplateRenderer(db, logger)
-	feedbackIntegration := feedback.NewDeploymentIntegration(db, feedbackManager, feedbackRenderer, logger)
-
-	// TODO: Register GitHub deliverer when token is configured
-	// This would typically be done after reading VCS configuration from DB
-	// For now, the deliverer will be registered when configuration is saved
-
 	return &Handler{
-		db:                  db,
-		auth:                authService,
-		logger:              logger,
-		scanner:             scanner.NewScanner(logger),
-		sbomGenerator:       scanner.NewSBOMGenerator(logger),
-		policyEngine:        policy.NewPolicyEngine(logger, "/app/policies"),
-		webhookService:      webhook.NewService(db, logger, encryptionSvc),
-		feedbackIntegration: feedbackIntegration,
-		registryService:     registry.NewService(db, logger, encryptionSvc),
-		encryptionSvc:       encryptionSvc,
-		license:             licenseClient,
-		cfg:                 cfg,
-		version:             version,
+		db:             db,
+		auth:           authService,
+		logger:         logger,
+		webhookService: webhook.NewService(db, logger, encryptionSvc),
+		encryptionSvc:  encryptionSvc,
+		license:        licenseClient,
+		cfg:            cfg,
+		version:        version,
 	}
 }
 
@@ -97,11 +74,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 			authGroup.POST("/verify-password", h.AuthMiddleware(), h.verifyPassword)
 			authGroup.POST("/send-confirmation-otp", h.AuthMiddleware(), h.sendConfirmationOTP)
 			authGroup.POST("/verify-confirmation-otp", h.AuthMiddleware(), h.verifyConfirmationOTP)
-
-			// SSO/OIDC routes (public)
-			authGroup.GET("/sso/providers", h.getAvailableSSOProviders)
-			authGroup.GET("/sso/:config_id/login", h.ssoLogin)
-			authGroup.GET("/sso/:config_id/callback", h.ssoCallback)
 		}
 
 		// Webhook receiver (public - uses signature verification)
@@ -207,12 +179,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				agents.GET("/:id/logs/unified", h.getUnifiedLogsReal)
 				agents.GET("/:id/logs/stream", h.streamUnifiedLogs)
 
-				// Databases
-				agents.GET("/:id/databases", h.listDatabases)
-				agents.POST("/:id/databases", h.RequireModifyContainers(), h.addDatabase)
-				agents.DELETE("/:id/databases/:did", h.RequireModifyContainers(), h.removeDatabase)
-				agents.GET("/:id/databases/:did/metrics", h.getDatabaseMetrics)
-
 				// Deployments (Epic 0: DevSecOps Foundations)
 				agents.GET("/:id/deployments", h.listDeployments)
 				agents.POST("/:id/deployments", h.RequireModifyContainers(), h.createDeployment)
@@ -239,19 +205,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				agents.DELETE("/:id/webhooks/:wid", h.RequireModifyContainers(), h.deleteWebhook)
 				agents.GET("/:id/webhooks/:wid/events", h.listWebhookEvents)
 				agents.POST("/:id/webhooks/:wid/regenerate", h.RequireModifyContainers(), h.regenerateWebhookSecret)
-
-			// CVE-Centric View (Epic 1: Supply Chain Security)
-			agents.GET(":id/cves", h.getCVESummaries)
-			agents.GET(":id/cves/:cve_id", h.getCVEDetail)
-
-			// Secret Migrations (agent-scoped)
-			agents.GET("/:id/secrets/migrations", h.listSecretMigrations)
-			agents.POST("/:id/secrets/migrations", h.RequireModifyContainers(), h.createMigration)
-			agents.GET("/:id/secrets/migrations/:migration_id", h.getMigration)
-			agents.POST("/:id/secrets/migrations/:migration_id/rollback", h.RequireModifyContainers(), h.rollbackMigration)
-
-			// Secret Import (import .env to container)
-			agents.POST("/:id/secrets/import", h.RequireModifyContainers(), h.importSecrets)
 		}
 
 			// Services view (cross-agent)
@@ -259,162 +212,11 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 			protected.GET("/services/:name/deployments", h.listServiceDeployments)
 			protected.GET("/services/:name/current", h.getCurrentDeployment)
 
-			// Security Scanning (Epic 1: Supply Chain Security) — requires Professional+
-			scans := protected.Group("/scans")
-			scans.Use(h.RequireFeature(license.FeatureVulnScanning))
-			{
-				scans.POST("", h.RequireModifyContainers(), h.triggerImageScan)
-				scans.GET("", h.listScans)
-				scans.GET("/ws", h.scanWebSocket)
-				scans.GET("/:sid", h.getScanDetails)
-				scans.GET("/:sid/vulnerabilities", h.getScanVulnerabilities)
-			}
-			// WebSocket helpers (ungated — used broadly)
+			// WebSocket helpers
 			protected.GET("/pulls/ws", h.pullWebSocket)
-			protected.GET("/imports/ws", h.importSecretsWebSocket)
-
-			// SBOM Management — requires Professional+
-			sboms := protected.Group("/sboms")
-			sboms.Use(h.RequireFeature(license.FeatureVulnScanning))
-			{
-				sboms.POST("", h.RequireModifyContainers(), h.generateSBOM)
-				sboms.GET("", h.listSBOMs)
-				sboms.GET("/:sid", h.getSBOMDetails)
-				sboms.GET("/:sid/download", h.downloadSBOM)
-				sboms.GET("/:sid/packages/search", h.searchSBOMPackages)
-			}
-
-			// Policy Management (Epic 2: Policy-as-Code)
-			policies := protected.Group("/policies")
-			{
-				policies.GET("", h.listPolicies)
-				policies.GET("/:name", h.getPolicy)
-				policies.PUT("/:name", h.RequireManageAlerts(), h.updatePolicy)
-				policies.GET("/decisions/recent", h.listPolicyDecisions)
-				policies.GET("/decisions/stats", h.getPolicyStats)
-				policies.POST("/evaluate/preview", h.previewPolicyEvaluation)
-			}
-
-			// Security Dashboard (Epic 5: DevSecOps Observability)
-			protected.GET("/security/posture", h.getSecurityPosture)
-
-			// Developer Feedback (Epic 8: Shift-Left Security)
-			feedback := protected.Group("/feedback")
-			{
-				feedback.GET("", h.listFeedback)
-				feedback.GET("/:fid", h.getFeedback)
-				feedback.POST("/:fid/deliver", h.RequireModifyContainers(), h.deliverFeedback)
-			}
-
-			// VCS Configuration (Epic 8: Shift-Left Security)
-			vcs := protected.Group("/vcs")
-			{
-				vcs.GET("/:provider", h.getVCSConfig)
-				vcs.PUT("/:provider", h.RequireManageAlerts(), h.saveVCSConfig)
-				vcs.DELETE("/:provider", h.RequireManageAlerts(), h.deleteVCSConfig)
-			}
-
-			// Risk Exceptions (Epic 9: Risk Acceptance & Exception Management)
-			exceptions := protected.Group("/exceptions")
-			{
-				exceptions.GET("", h.listExceptions)
-				exceptions.POST("", h.RequireModifyContainers(), h.createException)
-				exceptions.GET("/:eid", h.getException)
-				exceptions.POST("/:eid/approve", h.RequireManageAlerts(), h.approveException)
-				exceptions.POST("/:eid/deny", h.RequireManageAlerts(), h.denyException)
-				exceptions.POST("/:eid/revoke", h.RequireManageAlerts(), h.revokeException)
-				exceptions.GET("/:eid/history", h.getExceptionHistory)
-			}
-
-			// Service Ownership (Epic 10: Ownership & Accountability)
-			ownership := protected.Group("/ownership")
-			{
-				ownership.GET("/services", h.listServiceOwnerships)
-				ownership.POST("/services", h.RequireManageAlerts(), h.createServiceOwnership)
-				ownership.GET("/services/:oid", h.getServiceOwnership)
-				ownership.PUT("/services/:oid", h.RequireManageAlerts(), h.updateServiceOwnership)
-				ownership.DELETE("/services/:oid", h.RequireManageAlerts(), h.deleteServiceOwnership)
-
-				ownership.GET("/teams", h.listTeams)
-				ownership.POST("/teams", h.RequireManageAlerts(), h.createTeam)
-				ownership.PUT("/teams/:tid", h.RequireManageAlerts(), h.updateTeam)
-				ownership.DELETE("/teams/:tid", h.RequireManageAlerts(), h.deleteTeam)
-			}
-
-			// Security Maturity (Epic 11: Security Maturity Scoring)
-			maturity := protected.Group("/maturity")
-			{
-				maturity.GET("/scores", h.listSecurityScores)
-				maturity.POST("/scores/calculate", h.RequireManageAlerts(), h.calculateSecurityScore)
-				maturity.POST("/scores/calculate-all", h.RequireManageAlerts(), h.calculateAllTeamScores)
-				maturity.GET("/scores/teams", h.getLatestTeamScores)
-				maturity.GET("/scores/leaderboard", h.getTeamLeaderboard)
-				maturity.GET("/scores/trend", h.getScoreTrend)
-				maturity.GET("/metrics", h.listSecurityMetrics)
-			}
 
 			// License info (authenticated users can see their tier)
 			protected.GET("/license", h.LicenseInfo)
-
-			// Code Quality (Epic 12: Code Quality Integration)
-			codeQuality := protected.Group("/code-quality")
-			codeQuality.Use(h.RequireFeature(license.FeatureCodeQuality))
-			{
-				// Results
-				codeQuality.GET("/results", h.listCodeQualityResults)
-				codeQuality.GET("/results/:id", h.getCodeQualityResult)
-				codeQuality.POST("/results", h.RequireModifyContainers(), h.createCodeQualityResult)
-				codeQuality.GET("/results/:id/issues", h.getCodeQualityIssues)
-				codeQuality.GET("/results/:id/evaluations", h.getCodeQualityPolicyEvaluations)
-				codeQuality.POST("/results/:id/evaluate", h.RequireManageAlerts(), h.evaluateCodeQualityPolicies)
-
-				// Summaries & Leaderboard
-				codeQuality.GET("/summary", h.getProjectQualitySummary)
-				codeQuality.GET("/leaderboard", h.getCodeQualityLeaderboard)
-
-				// Policies
-				codeQuality.GET("/policies", h.listCodeQualityPolicies)
-				codeQuality.POST("/policies", h.RequireManageAlerts(), h.createCodeQualityPolicy)
-				codeQuality.PUT("/policies/:id", h.RequireManageAlerts(), h.updateCodeQualityPolicy)
-				codeQuality.DELETE("/policies/:id", h.RequireManageAlerts(), h.deleteCodeQualityPolicy)
-			}
-
-			// Platform Security (Epic 6: DevSecOps Hardening)
-			security := protected.Group("/security")
-			{
-				// Configuration
-				security.GET("/config", h.getPlatformSecurityConfig)
-				security.PUT("/config", h.RequireManageAlerts(), h.updatePlatformSecurityConfig)
-
-				// Self-Check & Posture
-				security.POST("/self-check", h.runSecuritySelfCheck)
-				security.GET("/platform-posture", h.getPlatformSecurityPosture)
-
-				// Policy Violations
-				security.GET("/violations", h.listPolicyViolations)
-				security.GET("/violations/summary", h.getViolationSummary)
-				security.POST("/violations/:id/acknowledge", h.RequireManageAlerts(), h.acknowledgeViolation)
-			}
-
-			// Runtime Security (Epic 3: Runtime Security & Drift Detection)
-			runtime := protected.Group("/runtime")
-			runtime.Use(h.RequireFeature(license.FeatureRuntimeSecurity))
-			{
-				// Drift Events
-				runtime.GET("/drift-events", h.listDriftEvents)
-				runtime.GET("/drift-events/:id", h.getDriftEvent)
-				runtime.POST("/drift-events/:id/resolve", h.RequireManageAlerts(), h.resolveDriftEvent)
-
-				// Behavioral Anomalies
-				runtime.GET("/anomalies", h.listBehavioralAnomalies)
-				runtime.GET("/anomalies/:id", h.getBehavioralAnomaly)
-				runtime.POST("/anomalies/:id/resolve", h.RequireManageAlerts(), h.resolveBehavioralAnomaly)
-
-				// Configuration & Posture
-				runtime.GET("/config", h.getRuntimeSecurityConfig)
-				runtime.PUT("/config", h.RequireManageAlerts(), h.updateRuntimeSecurityConfig)
-				runtime.GET("/posture", h.getRuntimeSecurityPosture)
-			}
 
 			// Traffic & Exposure Governance (Epic 13)
 			exposure := protected.Group("/exposure")
@@ -483,136 +285,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				traffic.POST("/policies/:id/assign", h.RequireManageAlerts(), h.assignTrafficPolicy)
 			}
 
-			// Database & Data Governance (Epic 14)
-			databases := protected.Group("/databases")
-			databases.Use(h.RequireFeature(license.FeatureDataGovernance))
-			{
-				databases.GET("", h.listDatabaseInventory)
-				databases.GET("/posture", h.getDatabasePosture)
-				databases.GET("/compliance", h.getDatabaseBackupCompliance)
-				databases.POST("", h.RequireManageAlerts(), h.createDatabaseInventory)
-				databases.GET("/:id", h.getDatabaseInventoryItem)
-				databases.PUT("/:id", h.RequireManageAlerts(), h.updateDatabaseInventory)
-				databases.DELETE("/:id", h.RequireManageAlerts(), h.deleteDatabaseInventory)
-				databases.GET("/:id/backups", h.listDatabaseBackups)
-			}
-
-			// Backup & Recovery (Epic 15)
-			backups := protected.Group("/backups")
-			{
-				backups.GET("/overview", h.getBackupOverview)
-				backups.GET("/jobs", h.listBackupJobs)
-				backups.POST("/jobs", h.RequireManageAlerts(), h.triggerBackup)
-				backups.GET("/restores", h.listRestoreOperations)
-				backups.POST("/restores", h.RequireManageAlerts(), h.triggerRestore)
-				backups.GET("/recovery-tests", h.listRecoveryTests)
-				backups.POST("/recovery-tests", h.RequireManageAlerts(), h.triggerRecoveryTest)
-				backups.GET("/readiness", h.getRecoveryReadiness)
-				backups.GET("/alerts", h.listBackupAlerts)
-				backups.PUT("/alerts/:id", h.RequireManageAlerts(), h.updateBackupAlertStatus)
-				backups.GET("/storage", h.listBackupStorage)
-				backups.POST("/storage", h.RequireManageAlerts(), h.createBackupStorage)
-				backups.DELETE("/storage/:id", h.RequireManageAlerts(), h.deleteBackupStorage)
-			}
-
-			// Secrets Hygiene (Epic 16)
-			secrets := protected.Group("/secrets")
-			secrets.Use(h.RequireFeature(license.FeatureSecretsManagement))
-			{
-				secrets.GET("", h.listSecrets)
-				secrets.GET("/hygiene", h.getSecretsHygieneSummary)
-				secrets.POST("", h.RequireManageAlerts(), h.createSecret)
-				secrets.GET("/:id", h.getSecret)
-				secrets.DELETE("/:id", h.RequireManageAlerts(), h.deleteSecret)
-				secrets.GET("/exposures", h.listSecretExposures)
-				secrets.GET("/exposures/summary", h.getSecretExposureSummary)
-				secrets.PUT("/exposures/:id", h.RequireManageAlerts(), h.updateExposureStatus)
-				secrets.GET("/rotations", h.listRotationHistory)
-				secrets.GET("/policies", h.listRotationPolicies)
-				secrets.POST("/policies", h.RequireManageAlerts(), h.createRotationPolicy)
-				secrets.DELETE("/policies/:id", h.RequireManageAlerts(), h.deleteRotationPolicy)
-				secrets.GET("/scans", h.listSecretScans)
-				secrets.POST("/scans", h.RequireManageAlerts(), h.triggerSecretScan)
-			}
-
-			// Background Jobs & Workers (Epic 17)
-			jobs := protected.Group("/jobs")
-			{
-				jobs.GET("", h.listJobs)
-				jobs.GET("/statistics", h.getJobStatistics)
-				jobs.POST("", h.RequireManageAlerts(), h.createJob)
-				jobs.GET("/:id", h.getJob)
-				jobs.POST("/:id/cancel", h.RequireManageAlerts(), h.cancelJob)
-				jobs.POST("/:id/retry", h.RequireManageAlerts(), h.retryJob)
-				jobs.GET("/:id/logs", h.getJobLogs)
-				jobs.GET("/schedules", h.listSchedules)
-				jobs.POST("/schedules", h.RequireManageAlerts(), h.createSchedule)
-				jobs.PUT("/schedules/:id/toggle", h.RequireManageAlerts(), h.toggleSchedule)
-				jobs.DELETE("/schedules/:id", h.RequireManageAlerts(), h.deleteSchedule)
-				jobs.GET("/workers", h.listWorkers)
-				jobs.GET("/workers/summary", h.getWorkerSummary)
-			}
-
-			// External Dependencies (Epic 18)
-			dependencies := protected.Group("/dependencies")
-			{
-				dependencies.GET("", h.listExternalServices)
-				dependencies.GET("/overview", h.getExternalHealthOverview)
-				dependencies.GET("/risks", h.getDependencyRisks)
-				dependencies.POST("", h.RequireManageAlerts(), h.createExternalService)
-				dependencies.GET("/:serviceId", h.getExternalService)
-				dependencies.PUT("/:serviceId", h.RequireManageAlerts(), h.updateExternalService)
-				dependencies.DELETE("/:serviceId", h.RequireManageAlerts(), h.deleteExternalService)
-				dependencies.GET("/:serviceId/health", h.getServiceHealthHistory)
-				dependencies.GET("/mappings", h.listServiceDependencies)
-				dependencies.POST("/mappings", h.RequireManageAlerts(), h.createServiceDependency)
-				dependencies.DELETE("/mappings/:dependencyId", h.RequireManageAlerts(), h.deleteServiceDependency)
-				dependencies.GET("/incidents", h.listExternalIncidents)
-				dependencies.POST("/incidents", h.RequireManageAlerts(), h.createExternalIncident)
-				dependencies.PUT("/incidents/:incidentId", h.RequireManageAlerts(), h.updateExternalIncidentStatus)
-			}
-
-			// Research & Metrics (Epic 7)
-			metrics := protected.Group("/metrics")
-			{
-				metrics.GET("", h.listMetricDefinitions)
-				metrics.POST("", h.RequireManageAlerts(), h.createMetricDefinition)
-				metrics.DELETE("/:metricId", h.RequireManageAlerts(), h.deleteMetricDefinition)
-				metrics.GET("/:metricId/values", h.getMetricValues)
-				metrics.GET("/summary", h.getMetricSummary)
-			}
-			dashboards := protected.Group("/dashboards")
-			{
-				dashboards.GET("", h.listDashboards)
-				dashboards.POST("", h.RequireManageAlerts(), h.createDashboard)
-				dashboards.DELETE("/:dashboardId", h.RequireManageAlerts(), h.deleteDashboard)
-			}
-			reports := protected.Group("/reports")
-			{
-				reports.GET("", h.listReports)
-				reports.POST("", h.RequireManageAlerts(), h.createReport)
-				reports.POST("/:reportId/run", h.RequireManageAlerts(), h.runReport)
-				reports.GET("/executions", h.listReportExecutions)
-			}
-			telemetry := protected.Group("/telemetry")
-			{
-				telemetry.GET("/settings", h.getTelemetrySettings)
-				telemetry.PUT("/settings", h.RequireManageAlerts(), h.updateTelemetrySettings)
-			}
-
-			// Container Registries
-			registries := protected.Group("/registries")
-			{
-				registries.GET("", h.listRegistries)
-				registries.POST("", h.RequireManageAlerts(), h.createRegistry)
-				registries.GET("/:rid", h.getRegistry)
-				registries.PUT("/:rid", h.RequireManageAlerts(), h.updateRegistry)
-				registries.DELETE("/:rid", h.RequireManageAlerts(), h.deleteRegistry)
-				registries.POST("/:rid/test", h.RequireManageAlerts(), h.testRegistryConnection)
-				registries.GET("/:rid/repositories", h.listRegistryRepositories)
-				registries.GET("/:rid/repositories/:repo/tags", h.listRegistryTags)
-			}
-
 			// Alerts
 			alerts := protected.Group("/alerts")
 			{
@@ -634,9 +306,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 			protected.GET("/health/tls", h.getTLSHealth)
 			protected.GET("/health/database", h.getDBHealth)
 			protected.GET("/health/system", h.getSystemHealth)
-
-			// Audit
-			protected.GET("/audit", h.getAuditLogsReal)
 
 			// Users (super_admin only)
 			users := protected.Group("/users")
@@ -660,18 +329,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				// License key management
 				settings.GET("/license", h.getLicenseSettings)
 				settings.PUT("/license", h.updateLicenseKey)
-
-				// Default pages
-				settings.GET("/default-pages", h.listDefaultPages)
-				settings.GET("/default-pages/:type", h.getDefaultPage)
-				settings.PUT("/default-pages/:type", h.updateDefaultPage)
-				settings.GET("/default-pages/:type/preview", h.previewDefaultPage)
-
-				// SSO Configuration
-				settings.GET("/sso", h.listSSOConfigs)
-				settings.POST("/sso", h.createSSOConfig)
-				settings.GET("/sso/:id", h.getSSOConfig)
-				settings.DELETE("/sso/:id", h.deleteSSOConfig)
 			}
 
 			// SSL/TLS Management
@@ -713,19 +370,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 
 		// Nginx log ingestion (agents push nginx access logs)
 		v1.POST("/logs/nginx/ingest", h.IngestNginxLogs)
-	}
-
-	// Protected log routes (require auth)
-	logs := v1.Group("/logs")
-	logs.Use(h.AuthMiddleware())
-	logs.Use(h.OrgMiddleware())
-	{
-		logs.GET("/persisted", h.GetPersistedLogs)
-		logs.GET("/sources", h.GetLogSources)
-		logs.GET("/retention", h.GetLogRetentionConfig)
-		logs.PUT("/retention", h.RequireRole(auth.RoleSuperAdmin), h.UpdateLogRetentionConfig)
-		logs.GET("/stats", h.GetLogStats)
-		logs.POST("/cleanup", h.RequireRole(auth.RoleSuperAdmin), h.RunLogCleanup)
 	}
 
 	// Traffic analytics routes (protected, require auth)

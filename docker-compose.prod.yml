@@ -64,7 +64,7 @@ services:
   # Backend API Server
   # =============================================================
   backend:
-    image: devsimplex/infrapilot-backend:${VERSION:-latest}
+    image: ghcr.io/tybali/infrapilot-ce-backend:${VERSION:-latest}
     build:
       context: ./backend
       dockerfile: ../deployments/backend.Dockerfile
@@ -104,7 +104,7 @@ services:
   # Frontend Dashboard
   # =============================================================
   frontend:
-    image: devsimplex/infrapilot-frontend:${VERSION:-latest}
+    image: ghcr.io/tybali/infrapilot-ce-frontend:${VERSION:-latest}
     build:
       context: ./frontend
       dockerfile: ../deployments/frontend.Dockerfile
@@ -154,7 +154,7 @@ services:
   # Agent - Docker & Nginx Controller
   # =============================================================
   agent:
-    image: devsimplex/infrapilot-agent:${VERSION:-latest}
+    image: ghcr.io/tybali/infrapilot-ce-agent:${VERSION:-latest}
     build:
       context: ./agent
       dockerfile: ../deployments/agent.Dockerfile

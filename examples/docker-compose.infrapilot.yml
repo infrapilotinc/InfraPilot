@@ -19,7 +19,7 @@
 
 services:
   infrapilot:
-    image: devsimplex/infrapilot:latest
+    image: ghcr.io/tybali/infrapilot-ce:latest
     container_name: infrapilot
     restart: unless-stopped
     ports:

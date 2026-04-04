@@ -21,7 +21,7 @@
 
 services:
   infrapilot:
-    image: devsimplex/infrapilot:${VERSION:-latest}
+    image: ghcr.io/tybali/infrapilot-ce:${VERSION:-latest}
     build:
       context: .
       dockerfile: Dockerfile

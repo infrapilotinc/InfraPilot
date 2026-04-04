@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -11,7 +10,6 @@ import (
 	"go.uber.org/zap"
 
 	agentgrpc "github.com/infrapilot/backend/internal/grpc"
-	"github.com/infrapilot/backend/internal/registry"
 )
 
 // ============ Docker Resource Types ============
@@ -95,7 +93,6 @@ type ImageInfo struct {
 // PullImageRequest is the request body for pulling an image
 type PullImageRequest struct {
 	Image      string  `json:"image" binding:"required"`
-	RegistryID *string `json:"registry_id,omitempty"`
 }
 
 // DockerAuthConfig represents authentication for Docker registry operations
@@ -782,32 +779,10 @@ func (h *Handler) pullDockerImage(c *gin.Context) {
 		return
 	}
 
-	// Build auth config if registry ID is provided
-	var authConfig *agentgrpc.DockerAuthConfig
-	if req.RegistryID != nil && *req.RegistryID != "" {
-		registryID, err := uuid.Parse(*req.RegistryID)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid registry ID"})
-			return
-		}
-
-		// Get registry and decrypt credentials
-		authConfig, err = h.buildAuthConfigFromRegistry(c.Request.Context(), orgID, registryID)
-		if err != nil {
-			h.logger.Warn("Failed to build auth config from registry",
-				zap.String("registry_id", registryID.String()),
-				zap.Error(err),
-			)
-			// Continue without auth - the pull might still work for public images
-		}
-	}
-
+	// CE: No authenticated registry support; pull images without auth
 	dockerCmd := agentgrpc.DockerResourceCommand{
 		Action:   agentgrpc.DockerActionPullImage,
 		ImageRef: req.Image,
-	}
-	if authConfig != nil {
-		dockerCmd.AuthConfig = authConfig
 	}
 
 	cmdPayload, _ := json.Marshal(dockerCmd)
@@ -843,59 +818,6 @@ func (h *Handler) pullDockerImage(c *gin.Context) {
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "unexpected response"})
 }
 
-// buildAuthConfigFromRegistry looks up a registry by ID and builds Docker auth config
-func (h *Handler) buildAuthConfigFromRegistry(ctx context.Context, orgID, registryID uuid.UUID) (*agentgrpc.DockerAuthConfig, error) {
-	reg, err := h.registryService.GetRegistry(ctx, orgID, registryID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Decrypt credentials
-	creds, err := h.registryService.GetDecryptedCredentials(ctx, orgID, registryID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Build auth config based on provider
-	authConfig := &agentgrpc.DockerAuthConfig{}
-
-	switch reg.Provider {
-	case registry.ProviderGHCR:
-		// GHCR uses token-based auth with username as placeholder
-		authConfig.Username = "oauth2accesstoken"
-		authConfig.Password = creds.Token
-		authConfig.ServerAddress = "ghcr.io"
-
-	case registry.ProviderDockerHub:
-		authConfig.Username = creds.Username
-		authConfig.Password = creds.Password
-		authConfig.ServerAddress = "https://index.docker.io/v1/"
-
-	case registry.ProviderECR:
-		// ECR would need AWS SDK to get temporary credentials
-		// For now, return nil as ECR auth is more complex
-		return nil, nil
-
-	case registry.ProviderGCR:
-		// GCR uses service account JSON as password
-		authConfig.Username = "_json_key"
-		authConfig.Password = creds.GCPServiceAccountJSON
-		authConfig.ServerAddress = "gcr.io"
-
-	case registry.ProviderACR:
-		// ACR uses service principal
-		authConfig.Username = creds.AzureClientID
-		authConfig.Password = creds.AzureClientSecret
-		if creds.AzureRegistryName != "" {
-			authConfig.ServerAddress = creds.AzureRegistryName + ".azurecr.io"
-		}
-
-	default:
-		return nil, nil
-	}
-
-	return authConfig, nil
-}
 
 // deleteDockerImage removes a Docker image
 // DELETE /api/v1/agents/:id/docker/images/:imgid

@@ -12,7 +12,6 @@ type Tab = {
   tierLabel?: string;
 };
 import { useQueryClient } from "@tanstack/react-query";
-import { useQuery } from "@tanstack/react-query";
 import { DockerProvider, useDocker } from "@/lib/docker-context";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Breadcrumb } from "@/components/ui/Breadcrumb";
@@ -21,8 +20,6 @@ import { Spinner } from "@/components/ui/Spinner";
 import { ContainerPanel } from "@/components/docker/ContainerPanel";
 import { DeploymentPanel } from "@/components/docker/DeploymentPanel";
 import { StackDeployWizard } from "@/components/StackDeployWizard";
-import { api } from "@/lib/api";
-import { Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const tabGroups: { id: string; label: string; tabs: Tab[] }[] = [
@@ -36,26 +33,14 @@ const tabGroups: { id: string; label: string; tabs: Tab[] }[] = [
       { id: "volumes",     label: "Volumes",     href: "/docker/volumes" },
       { id: "networks",    label: "Networks",    href: "/docker/networks" },
       { id: "logs",        label: "Logs",        href: "/docker/logs" },
-      { id: "registries",  label: "Registries",  href: "/docker/registries" },
     ],
   },
   {
     id: "management",
     label: "Management",
     tabs: [
-      { id: "stacks",      label: "Stacks",      href: "/docker/stacks",      requiredFeature: "stack_management",       tierLabel: "Pro" },
-      { id: "deployments", label: "Deployments", href: "/docker/deployments", requiredFeature: "stack_management",       tierLabel: "Pro" },
-    ],
-  },
-  {
-    id: "security",
-    label: "Security",
-    tabs: [
-      { id: "vulnerabilities", label: "Vulnerabilities", href: "/docker/vulnerabilities",       requiredFeature: "vulnerability_scanning", tierLabel: "Pro" },
-      { id: "cves",            label: "CVEs",            href: "/docker/vulnerabilities/cves",  requiredFeature: "vulnerability_scanning", tierLabel: "Pro" },
-      { id: "artifacts",       label: "Artifacts",       href: "/docker/artifacts",             requiredFeature: "vulnerability_scanning", tierLabel: "Pro" },
-      { id: "scans",           label: "Scans",           href: "/docker/artifacts/scans",       requiredFeature: "vulnerability_scanning", tierLabel: "Pro" },
-      { id: "sboms",           label: "SBOMs",           href: "/docker/artifacts/sboms",       requiredFeature: "vulnerability_scanning", tierLabel: "Pro" },
+      { id: "stacks",      label: "Stacks",      href: "/docker/stacks" },
+      { id: "deployments", label: "Deployments", href: "/docker/deployments" },
     ],
   },
 ];
@@ -67,27 +52,13 @@ function DockerLayoutContent({ children }: { children: ReactNode }) {
   const { activeAgents, selectedAgent, setSelectedAgent, isLoadingAgents } = useDocker();
   const [showStackDeployWizard, setShowStackDeployWizard] = useState(false);
 
-  const { data: licenseInfo } = useQuery({
-    queryKey: ["licenseTierInfo"],
-    queryFn: () => api.getLicenseTierInfo(),
-    staleTime: 60 * 1000,
-  });
-
-  // Check if we're on a detail page — but NOT for known tab-level sub-paths
+  // Check if we're on a detail page
   const parts = pathname.split("/");
-  const isTabSubPath = parts.length === 4 && (
-    parts[2] === "vulnerabilities" || parts[2] === "artifacts"
-  );
-  const isDetailPage = parts.length > 3 && !isTabSubPath;
+  const isDetailPage = parts.length > 3;
 
   // Determine active tab from pathname
   const getActiveTab = () => {
     if (pathname === "/docker") return "overview";
-    if (pathname.startsWith("/docker/vulnerabilities/cves")) return "cves";
-    if (pathname.startsWith("/docker/vulnerabilities")) return "vulnerabilities";
-    if (pathname.startsWith("/docker/artifacts/scans")) return "scans";
-    if (pathname.startsWith("/docker/artifacts/sboms")) return "sboms";
-    if (pathname.startsWith("/docker/artifacts")) return "artifacts";
     const segment = pathname.split("/")[2];
     return segment || "overview";
   };
@@ -229,37 +200,20 @@ function DockerLayoutContent({ children }: { children: ReactNode }) {
                   {group.label}
                 </span>
                 <div className="flex">
-                  {group.tabs.map((tab) => {
-                    const isLocked =
-                      !!tab.requiredFeature &&
-                      (!licenseInfo || !licenseInfo.features.includes(tab.requiredFeature));
-
-                    return (
-                      <button
-                        key={tab.id}
-                        onClick={() => router.push(isLocked ? "/settings/license" : tab.href)}
-                        title={isLocked ? `Requires ${tab.tierLabel} — click to manage license` : undefined}
-                        className={cn(
-                          "inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 py-3 px-3 text-sm font-medium transition-colors",
-                          isLocked
-                            ? "border-transparent text-gray-400 dark:text-gray-600 cursor-pointer opacity-70"
-                            : activeTab === tab.id
-                            ? "border-primary-500 text-primary-600 dark:text-primary-400"
-                            : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
-                        )}
-                      >
-                        {tab.label}
-                        {isLocked && (
-                          <>
-                            <Lock className="h-3 w-3" />
-                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700">
-                              {tab.tierLabel}
-                            </span>
-                          </>
-                        )}
-                      </button>
-                    );
-                  })}
+                  {group.tabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      onClick={() => router.push(tab.href)}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 py-3 px-3 text-sm font-medium transition-colors",
+                        activeTab === tab.id
+                          ? "border-primary-500 text-primary-600 dark:text-primary-400"
+                          : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
+                      )}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>

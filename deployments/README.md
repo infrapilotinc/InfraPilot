@@ -36,10 +36,10 @@ InfraPilot uses a multi-container architecture in production:
 |---------|-------|---------|
 | **postgres** | `postgres:16-alpine` | Database |
 | **redis** | `redis:7-alpine` | Cache & sessions |
-| **backend** | `devsimplex/infrapilot-backend` | API server |
-| **frontend** | `devsimplex/infrapilot-frontend` | Web dashboard |
+| **backend** | `ghcr.io/tybali/infrapilot-ce-backend` | API server |
+| **frontend** | `ghcr.io/tybali/infrapilot-ce-frontend` | Web dashboard |
 | **nginx** | `nginx:stable-alpine` | Reverse proxy (managed by agent) |
-| **agent** | `devsimplex/infrapilot-agent` | Docker & Nginx controller |
+| **agent** | `ghcr.io/tybali/infrapilot-ce-agent` | Docker & Nginx controller |
 
 ## Quick Start
 
@@ -326,6 +326,6 @@ docker compose -f docker-compose.prod.yml logs agent | grep nginx
 
 ## Support
 
-- **Documentation:** https://github.com/devsimplex-org/infrapilot
-- **Issues:** https://github.com/devsimplex-org/infrapilot/issues
+- **Documentation:** https://github.com/tybali/infrapilot-ce
+- **Issues:** https://github.com/tybali/infrapilot-ce/issues
 - **Security:** security@infrapilot.org

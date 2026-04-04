@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -466,7 +467,7 @@ func (h *Handler) updateTrafficResource(c *gin.Context) {
 		UPDATE traffic_resources SET %s, updated_at = NOW()
 		WHERE id = $%d AND org_id = $%d
 		RETURNING id
-	`, joinStrings(updates, ", "), argCount+1, argCount+2)
+	`, strings.Join(updates, ", "), argCount+1, argCount+2)
 	args = append(args, resourceUUID, orgID)
 
 	var returnedID uuid.UUID
@@ -771,7 +772,7 @@ func (h *Handler) updateTrafficPolicy(c *gin.Context) {
 		UPDATE traffic_policies SET %s, updated_at = NOW()
 		WHERE id = $%d AND org_id = $%d
 		RETURNING id
-	`, joinStrings(updates, ", "), argCount+1, argCount+2)
+	`, strings.Join(updates, ", "), argCount+1, argCount+2)
 	args = append(args, policyUUID, orgID)
 
 	var returnedID uuid.UUID

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -15,7 +14,6 @@ import (
 	"go.uber.org/zap"
 
 	agentgrpc "github.com/infrapilot/backend/internal/grpc"
-	"github.com/infrapilot/backend/internal/policy"
 )
 
 // ==================== Types ====================
@@ -388,214 +386,7 @@ func (h *Handler) runDeploymentPipeline(ctx context.Context, orgID, deploymentID
 			return
 		}
 		policyDecision = "allow"
-	} else {
-		// Step 1: Update status to scanning
-		if err := h.updateDeploymentStatus(ctx, deploymentID.String(), "scanning", "Scanning image for vulnerabilities"); err != nil {
-			logger.Error("Failed to update deployment status", zap.Error(err))
-			return
-		}
-
-		// Step 2: Scan image with Trivy
-	logger.Info("Scanning image for vulnerabilities")
-	scanResult, err := h.scanner.ScanImage(ctx, imageRef)
-	if err != nil {
-		logger.Error("Image scan failed", zap.Error(err))
-		h.updateDeploymentStatus(ctx, deploymentID.String(), "failed", "Image scan failed: "+err.Error())
-		return
-	}
-
-	// Store scan result
-	var scanID uuid.UUID
-	err = h.db.QueryRow(ctx, `
-		INSERT INTO scan_results (
-			org_id, image_digest, image_repository, image_tag,
-			critical_count, high_count, medium_count, low_count, unknown_count,
-			total_count, fixable_count,
-			scanner_name, scan_duration_ms, raw_output
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-		RETURNING id
-	`, orgID, scanResult.ImageDigest, scanResult.ImageRepository, scanResult.ImageTag,
-		scanResult.CriticalCount, scanResult.HighCount, scanResult.MediumCount,
-		scanResult.LowCount, scanResult.UnknownCount,
-		scanResult.TotalCount, scanResult.FixableCount,
-		"trivy", scanResult.ScanDuration.Milliseconds(), scanResult.RawOutput,
-	).Scan(&scanID)
-
-	if err != nil {
-		logger.Error("Failed to store scan result", zap.Error(err))
-		h.updateDeploymentStatus(ctx, deploymentID.String(), "failed", "Failed to store scan result")
-		return
-	}
-
-	logger.Info("Scan completed",
-		zap.String("scan_id", scanID.String()),
-		zap.Int("total_vulns", scanResult.TotalCount),
-		zap.Int("critical", scanResult.CriticalCount),
-	)
-
-	// Store individual vulnerabilities
-	for _, vuln := range scanResult.Vulnerabilities {
-		_, err = h.db.Exec(ctx, `
-			INSERT INTO vulnerabilities (
-				scan_result_id, cve_id, severity,
-				package_name, package_version, package_type,
-				fixed_version, fix_available,
-				title, description, cvss_v3_score, cvss_v3_vector,
-				reference_urls
-			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		`, scanID, vuln.CVEID, strings.ToLower(vuln.Severity),
-			vuln.PackageName, vuln.PackageVersion, vuln.PackageType,
-			vuln.FixedVersion, vuln.FixAvailable,
-			vuln.Title, vuln.Description, vuln.CVSSScore, vuln.CVSSVector,
-			vuln.References,
-		)
-		if err != nil {
-			logger.Warn("Failed to store vulnerability",
-				zap.Error(err),
-				zap.String("cve", vuln.CVEID),
-			)
-		}
-	}
-
-	// Step 3: Generate SBOM
-	logger.Info("Generating SBOM")
-	sbomResult, err := h.sbomGenerator.GenerateSBOM(ctx, imageRef)
-	if err != nil {
-		logger.Error("SBOM generation failed", zap.Error(err))
-		// Continue deployment even if SBOM fails
-	}
-
-	var sbomID *uuid.UUID
-	if sbomResult != nil {
-		var sid uuid.UUID
-		err = h.db.QueryRow(ctx, `
-			INSERT INTO sboms (
-				org_id, image_digest, image_repository,
-				format, spec_version,
-				total_packages, os_packages, library_packages,
-				sbom_json, generator_name, generator_version
-			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-			RETURNING id
-		`, orgID, sbomResult.ImageDigest, sbomResult.ImageRepository,
-			sbomResult.Format, sbomResult.SpecVersion,
-			sbomResult.TotalPackages, sbomResult.OSPackages, sbomResult.LibraryPackages,
-			sbomResult.Raw, sbomResult.GeneratorName, sbomResult.GeneratorVersion,
-		).Scan(&sid)
-
-		if err != nil {
-			logger.Error("Failed to store SBOM", zap.Error(err))
-		} else {
-			sbomID = &sid
-			logger.Info("SBOM generated", zap.String("sbom_id", sid.String()))
-		}
-	}
-
-	// Step 4: Update deployment with scan results
-	_, err = h.db.Exec(ctx, `
-		UPDATE deployments
-		SET scan_result_id = $1, sbom_id = $2, status = 'policy_check',
-		    status_message = 'Evaluating security policy', updated_at = NOW()
-		WHERE id = $3
-	`, scanID, sbomID, deploymentID)
-
-	if err != nil {
-		logger.Error("Failed to update deployment with scan results", zap.Error(err))
-		h.updateDeploymentStatus(ctx, deploymentID.String(), "failed", "Failed to update deployment")
-		return
-	}
-
-	// Step 5: Policy evaluation with OPA
-	logger.Info("Evaluating deployment policy")
-
-	// Fetch deployment details for policy evaluation
-	err = h.db.QueryRow(ctx, `
-		SELECT service_name, environment, image_repository,
-		       COALESCE(image_tag, ''), COALESCE(image_digest, ''),
-		       COALESCE(git_branch, ''), COALESCE(git_commit, '')
-		FROM deployments WHERE id = $1
-	`, deploymentID).Scan(
-		&deployment.ServiceName, &deployment.Environment, &deployment.ImageRepo,
-		&deployment.ImageTag, &deployment.ImageDigest,
-		&deployment.GitBranch, &deployment.GitCommit,
-	)
-	if err != nil {
-		logger.Error("Failed to fetch deployment for policy evaluation", zap.Error(err))
-		h.updateDeploymentStatus(ctx, deploymentID.String(), "failed", "Failed to evaluate policy")
-		return
-	}
-
-	// Prepare policy input
-	policyInput := policy.PolicyInput{
-		Deployment: policy.DeploymentInfo{
-			ServiceName: deployment.ServiceName,
-			Environment: deployment.Environment,
-			ImageRepo:   deployment.ImageRepo,
-			ImageTag:    deployment.ImageTag,
-			ImageDigest: deployment.ImageDigest,
-			GitBranch:   deployment.GitBranch,
-			GitCommit:   deployment.GitCommit,
-		},
-		ScanResult: policy.ScanResultInfo{
-			TotalCount:    scanResult.TotalCount,
-			CriticalCount: scanResult.CriticalCount,
-			HighCount:     scanResult.HighCount,
-			MediumCount:   scanResult.MediumCount,
-			LowCount:      scanResult.LowCount,
-			FixableCount:  scanResult.FixableCount,
-		},
-		Vulnerabilities: []policy.VulnerabilityInfo{}, // Not needed for basic policy
-	}
-
-	// Evaluate policy
-	policyResult, err := h.policyEngine.EvaluatePolicy(ctx, policyInput)
-	if err != nil {
-		logger.Error("Policy evaluation failed", zap.Error(err))
-		// Fallback to deny on error
-		policyResult = &policy.PolicyResult{
-			Decision: "deny",
-			Reason:   "Policy evaluation error: " + err.Error(),
-		}
-	}
-
-	policyDecision = policyResult.Decision
-	policyReason = policyResult.Reason
-
-	logger.Info("Policy evaluation completed",
-		zap.String("decision", policyDecision),
-		zap.String("reason", policyReason),
-	)
-
-	_, err = h.db.Exec(ctx, `
-		UPDATE deployments
-		SET policy_decision = $1, policy_reason = $2,
-		    status = 'deploying', status_message = 'Ready for deployment',
-		    updated_at = NOW()
-		WHERE id = $3
-	`, policyDecision, policyReason, deploymentID)
-
-	if err != nil {
-		logger.Error("Failed to update deployment policy decision", zap.Error(err))
-		return
-	}
-
-		logger.Info("Deployment pipeline completed with scanning",
-			zap.String("policy_decision", policyDecision),
-		)
-
-		// Epic 8: Generate developer feedback for policy violations
-		if h.feedbackIntegration != nil {
-			if err := h.feedbackIntegration.GenerateFeedbackForDeployment(ctx, deploymentID); err != nil {
-				logger.Warn("Failed to generate developer feedback",
-					zap.Error(err),
-					zap.String("deployment_id", deploymentID.String()),
-				)
-				// Don't fail deployment on feedback generation errors
-			}
-		}
-	} // end of !skipScanning block
+	} // CE: scanning not available in community edition
 
 	// Phase 4: Deploy container to agent
 	if policyDecision != "deny" {
@@ -644,11 +435,6 @@ func (h *Handler) runDeploymentPipeline(ctx context.Context, orgID, deploymentID
 
 // deployContainerToAgent sends a command to the agent to run a container
 func (h *Handler) deployContainerToAgent(ctx context.Context, orgID, deploymentID, agentID uuid.UUID, imageRef, serviceName, environment string, containerConfig *DeploymentContainerConfig) (*agentgrpc.ContainerRunResult, error) {
-	logger := h.logger.With(
-		zap.String("deployment_id", deploymentID.String()),
-		zap.String("image", imageRef),
-	)
-
 	// Use container_name from compose if provided, otherwise generate one
 	containerName := ""
 	if containerConfig != nil && containerConfig.ContainerName != "" {
@@ -676,36 +462,6 @@ func (h *Handler) deployContainerToAgent(ctx context.Context, orgID, deploymentI
 		"name":           containerName,
 		"restart_policy": "unless-stopped",
 		"labels":         labels,
-	}
-
-	// Try to get registry auth for the image
-	if h.registryService != nil {
-		reg, err := h.registryService.GetRegistryByImageRef(ctx, orgID, imageRef)
-		if err != nil {
-			logger.Debug("No registry found for image, will try without auth",
-				zap.String("image", imageRef),
-				zap.Error(err),
-			)
-		} else {
-			// Build auth config
-			authConfig, err := h.buildAuthConfigFromRegistry(ctx, orgID, reg.ID)
-			if err != nil {
-				logger.Warn("Failed to build auth config from registry",
-					zap.String("registry_id", reg.ID.String()),
-					zap.Error(err),
-				)
-			} else if authConfig != nil {
-				logger.Info("Using registry auth for image pull",
-					zap.String("registry", reg.Name),
-					zap.String("provider", string(reg.Provider)),
-				)
-				options["auth"] = map[string]interface{}{
-					"username":       authConfig.Username,
-					"password":       authConfig.Password,
-					"server_address": authConfig.ServerAddress,
-				}
-			}
-		}
 	}
 
 	// Add container configuration if provided

@@ -124,12 +124,6 @@ func (h *Handler) createUserReal(c *gin.Context) {
 		return
 	}
 
-	// Log audit event
-	h.logAuditEvent(c, "user.created", "user", &user.ID, map[string]string{
-		"email": req.Email,
-		"role":  req.Role,
-	})
-
 	c.JSON(http.StatusCreated, user)
 }
 
@@ -212,12 +206,6 @@ func (h *Handler) updateUserReal(c *gin.Context) {
 		return
 	}
 
-	// Log audit event
-	h.logAuditEvent(c, "user.updated", "user", &userID, map[string]string{
-		"email": user.Email,
-		"role":  user.Role,
-	})
-
 	c.JSON(http.StatusOK, user)
 }
 
@@ -260,11 +248,6 @@ func (h *Handler) deleteUserReal(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
-
-	// Log audit event
-	h.logAuditEvent(c, "user.deleted", "user", &userID, map[string]string{
-		"email": email,
-	})
 
 	c.JSON(http.StatusOK, gin.H{"message": "user deleted"})
 }

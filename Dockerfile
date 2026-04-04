@@ -8,7 +8,7 @@
 #     -v /var/run/docker.sock:/var/run/docker.sock \
 #     -v infrapilot_data:/data \
 #     -e JWT_SECRET=your-secret-key \
-#     devsimplex/infrapilot
+#     ghcr.io/tybali/infrapilot-ce
 # =============================================================
 
 # -------------------------------------------------------------
@@ -82,21 +82,21 @@ FROM alpine:3.21
 # -------------------------------------------------------------
 
 # Human-readable name of the image
-LABEL org.opencontainers.image.title="InfraPilot"
+LABEL org.opencontainers.image.title="InfraPilot CE"
 # Short description shown on Docker Hub search & repo page
-LABEL org.opencontainers.image.description="Open-source control plane for Docker, NGINX, and self-hosted infrastructure"
+LABEL org.opencontainers.image.description="Open-source community edition control plane for Docker, NGINX, and self-hosted infrastructure"
 # Project homepage (can be same as repo or website)
 LABEL org.opencontainers.image.url="https://infrapilot.org"
 # Source code repository (VERY IMPORTANT)
-LABEL org.opencontainers.image.source="https://github.com/devsimplex-org/infrapilot"
+LABEL org.opencontainers.image.source="https://github.com/tybali/infrapilot-ce"
 # Documentation / README link (Docker Hub auto-links this)
-LABEL org.opencontainers.image.documentation="https://github.com/devsimplex-org/infrapilot#readme"
+LABEL org.opencontainers.image.documentation="https://github.com/tybali/infrapilot-ce#readme"
 # License identifier (SPDX format)
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 # Organization / vendor name
-LABEL org.opencontainers.image.vendor="DevSimplex"
+LABEL org.opencontainers.image.vendor="tybali"
 # Author / maintainer (optional but professional)
-LABEL org.opencontainers.image.authors="DevSimplex <hello@devsimplex.com>"
+LABEL org.opencontainers.image.authors="tybali"
 # Image version (should match git tag or release)
 LABEL org.opencontainers.image.version="1.0.0"
 # Build creation time (auto-filled during build)
