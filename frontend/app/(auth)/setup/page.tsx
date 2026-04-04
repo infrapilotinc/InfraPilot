@@ -110,7 +110,8 @@ export default function SetupPage() {
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
               Welcome to InfraPilot
             </h1>
-            <p className="text-gray-600 dark:text-gray-400 mt-1">
+            <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 rounded-full">Community Edition</span>
+            <p className="text-gray-600 dark:text-gray-400 mt-2">
               Complete setup to get started
             </p>
           </div>

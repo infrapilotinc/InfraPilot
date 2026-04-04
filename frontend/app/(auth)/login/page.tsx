@@ -187,6 +187,7 @@ function LoginForm() {
       <div className="text-center mb-8">
         <img src="/logo.svg" alt="InfraPilot" className="h-12 w-12 mx-auto mb-4" />
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">InfraPilot</h1>
+        <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 rounded-full">Community Edition</span>
         <p className="text-gray-600 dark:text-gray-400 mt-2">Sign in to your account</p>
       </div>
 

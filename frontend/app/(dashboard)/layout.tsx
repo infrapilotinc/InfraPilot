@@ -197,7 +197,10 @@ export default function DashboardLayout({
         <div className="p-6 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
             <img src="/logo.svg" alt="InfraPilot" className="h-8 w-8" />
-            <span className="text-xl font-bold text-gray-900 dark:text-white">InfraPilot</span>
+            <div className="flex flex-col">
+              <span className="text-xl font-bold text-gray-900 dark:text-white leading-tight">InfraPilot</span>
+              <span className="text-[10px] font-medium text-primary-600 dark:text-primary-400 leading-tight">Community Edition</span>
+            </div>
           </Link>
           <button
             onClick={() => setSidebarOpen(false)}
@@ -258,7 +261,10 @@ export default function DashboardLayout({
           </button>
           <Link href="/" className="flex items-center gap-2">
             <img src="/logo.svg" alt="InfraPilot" className="h-6 w-6" />
-            <span className="text-lg font-semibold text-gray-900 dark:text-white">InfraPilot</span>
+            <div className="flex flex-col">
+              <span className="text-lg font-semibold text-gray-900 dark:text-white leading-tight">InfraPilot</span>
+              <span className="text-[10px] font-medium text-primary-600 dark:text-primary-400 leading-tight">Community Edition</span>
+            </div>
           </Link>
           <div className="w-10" />
         </header>
