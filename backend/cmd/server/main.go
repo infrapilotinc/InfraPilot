@@ -92,7 +92,7 @@ func main() {
 		if !resp.Valid {
 			logger.Fatal("Invalid license key",
 				zap.String("error", resp.Error),
-				zap.String("help", "Visit https://infrapilot.sh to manage your license"),
+				zap.String("help", "Visit https://infrapilot.org to manage your license"),
 			)
 		}
 		logger.Info("License validated",
@@ -115,10 +115,10 @@ func main() {
 				if validateErr == nil && resp != nil && resp.Valid {
 					logger.Info("License loaded from database", zap.String("tier", resp.Tier))
 				} else if validateErr != nil {
-					// Network error reaching infrapilot.sh — keep the client.
+					// Network error reaching infrapilot.org — keep the client.
 					// HasFeature() returns false until validation succeeds (safe default).
 					// Retries happen automatically, throttled to once per 5 minutes.
-					logger.Warn("License validation failed at startup — features restricted until infrapilot.sh is reachable",
+					logger.Warn("License validation failed at startup — features restricted until infrapilot.org is reachable",
 						zap.Error(validateErr))
 				} else {
 					// resp.Valid == false: key is explicitly invalid

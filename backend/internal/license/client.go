@@ -15,14 +15,14 @@ import (
 )
 
 const (
-	validationURL = "https://infrapilot.sh/api/license/validate"
+	validationURL = "https://infrapilot.org/api/license/validate"
 	cacheDuration = 24 * time.Hour
 	graceDuration = 48 * time.Hour
 	httpTimeout   = 10 * time.Second
 	retryInterval = 5 * time.Minute // minimum gap between failed validation attempts
 )
 
-// ValidationResponse mirrors the JSON returned by infrapilot.sh/api/license/validate.
+// ValidationResponse mirrors the JSON returned by infrapilot.org/api/license/validate.
 type ValidationResponse struct {
 	Valid      bool     `json:"valid"`
 	Tier       string   `json:"tier"`
@@ -36,7 +36,7 @@ type ValidationResponse struct {
 	} `json:"issued_to,omitempty"`
 }
 
-// Client validates and caches a license key against infrapilot.sh.
+// Client validates and caches a license key against infrapilot.org.
 type Client struct {
 	licenseKey string
 	instanceID string
@@ -269,7 +269,7 @@ func (c *Client) UpdateKey(newKey string) (*ValidationResponse, error) {
 }
 
 // NewOfflineClient returns a client with all features enabled — for development only.
-// It never calls infrapilot.sh. Panics in production.
+// It never calls infrapilot.org. Panics in production.
 func NewOfflineClient(logger *zap.Logger) *Client {
 	if os.Getenv("ENV") == "production" {
 		panic("NewOfflineClient must never be used in production")

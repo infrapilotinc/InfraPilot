@@ -1,6 +1,6 @@
 package license
 
-// Feature constants — must match what infrapilot.sh returns in the features array.
+// Feature constants — must match what infrapilot.org returns in the features array.
 const (
 	FeatureCoreMonitoring      = "core_monitoring"
 	FeatureBasicAlerts         = "basic_alerts"

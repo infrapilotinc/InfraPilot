@@ -231,8 +231,8 @@ function LicenseSection() {
                       />
                       <p className="mt-1.5 text-xs text-gray-500">
                         Get a free key at{" "}
-                        <a href="https://infrapilot.sh/signup" target="_blank" rel="noopener noreferrer" className="text-primary-400 hover:underline">
-                          infrapilot.sh/signup
+                        <a href="https://infrapilot.org/signup" target="_blank" rel="noopener noreferrer" className="text-primary-400 hover:underline">
+                          infrapilot.org/signup
                         </a>
                       </p>
                     </div>
@@ -282,7 +282,7 @@ function LicenseSection() {
                     </p>
                   </div>
                   <a
-                    href={license?.upgrade_url ?? "https://infrapilot.sh/billing"}
+                    href={license?.upgrade_url ?? "https://infrapilot.org/billing"}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors flex items-center gap-2 text-sm flex-shrink-0"

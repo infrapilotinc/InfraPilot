@@ -87,7 +87,7 @@ func (h *Handler) setupLicense(c *gin.Context) {
 		return
 	}
 
-	// Validate the license key against infrapilot.sh
+	// Validate the license key against infrapilot.org
 	client, err := license.NewClient(req.Key, h.cfg.DataDir, h.version, h.logger)
 	if err != nil {
 		h.logger.Error("Failed to initialize license client", zap.Error(err))
@@ -282,7 +282,7 @@ func (h *Handler) getLicenseSettings(c *gin.Context) {
 			Tier:       "unknown",
 			MaxAgents:  0,
 			Features:   []string{},
-			UpgradeURL: "https://infrapilot.sh/billing",
+			UpgradeURL: "https://infrapilot.org/billing",
 			KeySource:  "setup_mode",
 		})
 		return
@@ -317,7 +317,7 @@ func (h *Handler) getLicenseSettings(c *gin.Context) {
 		MaxAgents:  resp.MaxAgents,
 		Features:   resp.Features,
 		ExpiresAt:  resp.ExpiresAt,
-		UpgradeURL: "https://infrapilot.sh/billing",
+		UpgradeURL: "https://infrapilot.org/billing",
 		KeyDisplay: keyDisplay,
 		KeySource:  keySource,
 	})
@@ -340,7 +340,7 @@ func (h *Handler) updateLicenseKey(c *gin.Context) {
 		return
 	}
 
-	// Validate the new key against infrapilot.sh and swap it in-memory.
+	// Validate the new key against infrapilot.org and swap it in-memory.
 	resp, err := h.license.UpdateKey(req.Key)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "license validation failed: " + err.Error()})
@@ -400,7 +400,7 @@ func (h *Handler) updateLicenseKey(c *gin.Context) {
 		MaxAgents:  resp.MaxAgents,
 		Features:   resp.Features,
 		ExpiresAt:  resp.ExpiresAt,
-		UpgradeURL: "https://infrapilot.sh/billing",
+		UpgradeURL: "https://infrapilot.org/billing",
 		KeyDisplay: maskLicenseKey(req.Key),
 		KeySource:  "database",
 	})

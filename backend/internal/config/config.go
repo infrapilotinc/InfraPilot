@@ -20,7 +20,7 @@ type Config struct {
 	JWTExpiry      time.Duration
 	AllowedOrigins []string
 	EncryptionKey  string // 64-char hex string (32 bytes) for AES-256-GCM encryption
-	LicenseKey string // License key from infrapilot.sh
+	LicenseKey string // License key from infrapilot.org
 	DataDir    string // Persistent data directory for instance ID etc.
 }
 

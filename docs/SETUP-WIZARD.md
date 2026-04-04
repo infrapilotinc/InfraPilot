@@ -15,14 +15,14 @@ The `system_settings` table (migration 006) already exists and can store the lic
 ```
 main.go startup:
   if LICENSE_OFFLINE=true AND env != production → offline client (dev)
-  else if LICENSE_KEY env is set → validate with infrapilot.sh (as today)
+  else if LICENSE_KEY env is set → validate with infrapilot.org (as today)
   else → query system_settings for saved license key
-    if found → validate with infrapilot.sh
+    if found → validate with infrapilot.org
     if not found → use offline client (setup mode, all features enabled temporarily)
                    log warning: "No license key configured. Complete setup at the web UI."
 ```
 
-After setup, the key is in `system_settings`. The in-memory offline client stays active for the current session (all features work). On next container restart, the server reads the DB key and validates properly with infrapilot.sh.
+After setup, the key is in `system_settings`. The in-memory offline client stays active for the current session (all features work). On next container restart, the server reads the DB key and validates properly with infrapilot.org.
 
 ---
 
@@ -71,14 +71,14 @@ POST /api/v1/setup/license
 Body: { "key": "IP-CE-XXXX-XXXX-XXXX" }
 ```
 - Guard: if users exist → 400 "setup already completed"
-- Call infrapilot.sh `POST /api/license/validate` with the key + placeholder instance_id
+- Call infrapilot.org `POST /api/license/validate` with the key + placeholder instance_id
 - If valid → upsert into `system_settings`:
   - Ensure default org exists first (same pattern as `createInitialAdmin`)
   - `org_id = 00000000-0000-0000-0000-000000000001`
   - `setting_key = 'license_key'`
   - `setting_value = {"key": "IP-CE-...", "tier": "community", "max_agents": 1}`
 - Return `{ valid: true, tier: "community", max_agents: 1, features: [...] }`
-- If invalid → 400 with error message from infrapilot.sh
+- If invalid → 400 with error message from infrapilot.org
 
 ### New `SetupLicenseRequest` struct
 ```go
@@ -188,7 +188,7 @@ useEffect(() => {
 - Validate button → calls `api.setupLicense(key)`
 - On success: show green badge "Community Edition · 1 agent ✓", then auto-advance to step 2
 - On error: show red error from API response
-- Link: "Don't have a key? Get one free at infrapilot.sh/signup"
+- Link: "Don't have a key? Get one free at infrapilot.org/signup"
 
 **Step 2 UI:**
 - Existing admin creation form (email, password, confirm password)
@@ -219,6 +219,6 @@ useEffect(() => {
 1. Fresh install (no env vars): server starts → open browser → redirected to `/setup` → step 1 shows
 2. Enter license key `IP-CE-DTSE-QPNW-WG7U` → "Community Edition ✓" shown → step 2 auto-opens
 3. Create admin account → redirected to dashboard → logged in
-4. `docker restart infrapilot` → server reads key from `system_settings` → validates with infrapilot.sh → starts with real license
+4. `docker restart infrapilot` → server reads key from `system_settings` → validates with infrapilot.org → starts with real license
 5. Existing install with `LICENSE_KEY` env set → `license_configured: true` → setup wizard skips to step 2 (admin creation only)
 6. `LICENSE_OFFLINE=true` → `license_configured: true` → wizard skips to step 2

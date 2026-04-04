@@ -187,12 +187,12 @@ export default function SetupPage() {
               <p className="text-center text-sm text-gray-500 dark:text-gray-400">
                 Don&apos;t have a key?{" "}
                 <a
-                  href="https://infrapilot.sh/signup"
+                  href="https://infrapilot.org/signup"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-primary-600 dark:text-primary-400 hover:underline"
                 >
-                  Get one free at infrapilot.sh/signup
+                  Get one free at infrapilot.org/signup
                 </a>
               </p>
             </form>

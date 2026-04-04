@@ -225,7 +225,7 @@ func (h *Handler) RequireFeature(feature string) gin.HandlerFunc {
 				"error": "This feature is not available on your current plan",
 				"feature":     feature,
 				"tier":        h.license.Tier(),
-				"upgrade_url": "https://infrapilot.sh/billing",
+				"upgrade_url": "https://infrapilot.org/billing",
 			})
 			return
 		}
@@ -257,7 +257,7 @@ func (h *Handler) LicenseInfo(c *gin.Context) {
 		MaxAgents:  resp.MaxAgents,
 		Features:   resp.Features,
 		ExpiresAt:  resp.ExpiresAt,
-		UpgradeURL: "https://infrapilot.sh/billing",
+		UpgradeURL: "https://infrapilot.org/billing",
 	})
 }
 
