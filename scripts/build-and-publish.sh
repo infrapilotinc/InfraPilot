@@ -11,6 +11,8 @@ set -e
 # - Agent Controller
 # - All-in-One (legacy/convenience image)
 #
+# Pushes to both Docker Hub and GitHub Container Registry.
+#
 # Usage:
 #   ./scripts/build-and-publish.sh [VERSION] [OPTIONS]
 #
@@ -35,9 +37,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Registry target. Override with REGISTRY env var for private registries.
-# Community images are published to ghcr.io/infrapilot-sh/infrapilot (public).
-IMAGE_PREFIX="${REGISTRY:-ghcr.io/tybali/infrapilot-ce}"
+# Registries — images are pushed to both Docker Hub and GHCR.
+# Override with env vars for private registries.
+DH_PREFIX="${DH_REGISTRY:-infrapilotsh/infrapilot-ce}"
+GHCR_PREFIX="${GHCR_REGISTRY:-ghcr.io/infrapilotsh/infrapilot-ce}"
 
 # Colors
 RED='\033[0;31m'
@@ -108,10 +111,37 @@ echo -e "${GREEN}================================================${NC}"
 echo -e "${GREEN}  InfraPilot Docker Build & Publish${NC}"
 echo -e "${GREEN}================================================${NC}"
 echo ""
-echo -e "  Version: ${BLUE}$VERSION${NC}"
-echo -e "  Push:    ${BLUE}$PUSH${NC}"
+echo -e "  Version:  ${BLUE}$VERSION${NC}"
+echo -e "  Push:     ${BLUE}$PUSH${NC}"
 echo -e "  Platform: ${BLUE}${PLATFORM:-default}${NC}"
+echo -e "  Docker Hub: ${BLUE}${DH_PREFIX}${NC}"
+echo -e "  GHCR:       ${BLUE}${GHCR_PREFIX}${NC}"
 echo ""
+
+# Helper: tag and push an image to both registries
+push_both() {
+    local name="$1"    # e.g. "-backend" or ""
+    local ver="$2"     # e.g. "v1.0.0"
+
+    local dh_img="${DH_PREFIX}${name}"
+    local ghcr_img="${GHCR_PREFIX}${name}"
+
+    # Tag for GHCR (Docker Hub tag already applied during build)
+    docker tag "${dh_img}:${ver}" "${ghcr_img}:${ver}"
+
+    echo -e "${YELLOW}Pushing to Docker Hub...${NC}"
+    docker push "${dh_img}:${ver}"
+
+    echo -e "${YELLOW}Pushing to GHCR...${NC}"
+    docker push "${ghcr_img}:${ver}"
+
+    if [ "$ver" != "latest" ]; then
+        docker tag "${dh_img}:${ver}" "${dh_img}:latest"
+        docker tag "${dh_img}:${ver}" "${ghcr_img}:latest"
+        docker push "${dh_img}:latest"
+        docker push "${ghcr_img}:latest"
+    fi
+}
 
 # =============================================================
 # Build Backend
@@ -121,20 +151,12 @@ if [ "$BUILD_BACKEND" = true ]; then
     docker build \
         $PLATFORM \
         --build-arg VERSION="${VERSION}" \
-        -t "${IMAGE_PREFIX}-backend:${VERSION}" \
+        -t "${DH_PREFIX}-backend:${VERSION}" \
         -f deployments/backend.Dockerfile \
         ./backend
 
-    if [ "$VERSION" != "latest" ]; then
-        docker tag "${IMAGE_PREFIX}-backend:${VERSION}" "${IMAGE_PREFIX}-backend:latest"
-    fi
-
     if [ "$PUSH" = true ]; then
-        echo -e "${YELLOW}Pushing Backend...${NC}"
-        docker push "${IMAGE_PREFIX}-backend:${VERSION}"
-        if [ "$VERSION" != "latest" ]; then
-            docker push "${IMAGE_PREFIX}-backend:latest"
-        fi
+        push_both "-backend" "${VERSION}"
     fi
     echo -e "${GREEN}✓ Backend complete${NC}"
     echo ""
@@ -147,20 +169,12 @@ if [ "$BUILD_FRONTEND" = true ]; then
     echo -e "${YELLOW}Building Frontend Dashboard...${NC}"
     docker build \
         $PLATFORM \
-        -t "${IMAGE_PREFIX}-frontend:${VERSION}" \
+        -t "${DH_PREFIX}-frontend:${VERSION}" \
         -f deployments/frontend.Dockerfile \
         ./frontend
 
-    if [ "$VERSION" != "latest" ]; then
-        docker tag "${IMAGE_PREFIX}-frontend:${VERSION}" "${IMAGE_PREFIX}-frontend:latest"
-    fi
-
     if [ "$PUSH" = true ]; then
-        echo -e "${YELLOW}Pushing Frontend...${NC}"
-        docker push "${IMAGE_PREFIX}-frontend:${VERSION}"
-        if [ "$VERSION" != "latest" ]; then
-            docker push "${IMAGE_PREFIX}-frontend:latest"
-        fi
+        push_both "-frontend" "${VERSION}"
     fi
     echo -e "${GREEN}✓ Frontend complete${NC}"
     echo ""
@@ -173,20 +187,12 @@ if [ "$BUILD_AGENT" = true ]; then
     echo -e "${YELLOW}Building Agent Controller...${NC}"
     docker build \
         $PLATFORM \
-        -t "${IMAGE_PREFIX}-agent:${VERSION}" \
+        -t "${DH_PREFIX}-agent:${VERSION}" \
         -f deployments/agent.Dockerfile \
         ./agent
 
-    if [ "$VERSION" != "latest" ]; then
-        docker tag "${IMAGE_PREFIX}-agent:${VERSION}" "${IMAGE_PREFIX}-agent:latest"
-    fi
-
     if [ "$PUSH" = true ]; then
-        echo -e "${YELLOW}Pushing Agent...${NC}"
-        docker push "${IMAGE_PREFIX}-agent:${VERSION}"
-        if [ "$VERSION" != "latest" ]; then
-            docker push "${IMAGE_PREFIX}-agent:latest"
-        fi
+        push_both "-agent" "${VERSION}"
     fi
     echo -e "${GREEN}✓ Agent complete${NC}"
     echo ""
@@ -200,20 +206,12 @@ if [ "$BUILD_ALL_IN_ONE" = true ]; then
     docker build \
         $PLATFORM \
         --build-arg VERSION="${VERSION}" \
-        -t "${IMAGE_PREFIX}:${VERSION}" \
+        -t "${DH_PREFIX}:${VERSION}" \
         -f Dockerfile \
         .
 
-    if [ "$VERSION" != "latest" ]; then
-        docker tag "${IMAGE_PREFIX}:${VERSION}" "${IMAGE_PREFIX}:latest"
-    fi
-
     if [ "$PUSH" = true ]; then
-        echo -e "${YELLOW}Pushing All-in-One...${NC}"
-        docker push "${IMAGE_PREFIX}:${VERSION}"
-        if [ "$VERSION" != "latest" ]; then
-            docker push "${IMAGE_PREFIX}:latest"
-        fi
+        push_both "" "${VERSION}"
     fi
     echo -e "${GREEN}✓ All-in-One complete${NC}"
     echo ""
@@ -228,51 +226,69 @@ echo -e "${GREEN}================================================${NC}"
 echo ""
 
 if [ "$BUILD_BACKEND" = true ]; then
-    echo -e "  ${BLUE}Backend:${NC}    ${IMAGE_PREFIX}-backend:${VERSION}"
+    echo -e "  ${BLUE}Backend:${NC}    ${DH_PREFIX}-backend:${VERSION}"
 fi
 if [ "$BUILD_FRONTEND" = true ]; then
-    echo -e "  ${BLUE}Frontend:${NC}   ${IMAGE_PREFIX}-frontend:${VERSION}"
+    echo -e "  ${BLUE}Frontend:${NC}   ${DH_PREFIX}-frontend:${VERSION}"
 fi
 if [ "$BUILD_AGENT" = true ]; then
-    echo -e "  ${BLUE}Agent:${NC}      ${IMAGE_PREFIX}-agent:${VERSION}"
+    echo -e "  ${BLUE}Agent:${NC}      ${DH_PREFIX}-agent:${VERSION}"
 fi
 if [ "$BUILD_ALL_IN_ONE" = true ]; then
-    echo -e "  ${BLUE}All-in-One:${NC} ${IMAGE_PREFIX}:${VERSION}"
+    echo -e "  ${BLUE}All-in-One:${NC} ${DH_PREFIX}:${VERSION}"
 fi
 
 echo ""
 
 if [ "$PUSH" = true ]; then
-    echo -e "${GREEN}Images pushed to GitHub Container Registry${NC}"
+    echo -e "${GREEN}Images pushed to Docker Hub and GHCR${NC}"
     echo ""
-    echo "To pull images:"
+    echo "Docker Hub:"
     if [ "$BUILD_BACKEND" = true ]; then
-        echo "  docker pull ${IMAGE_PREFIX}-backend:${VERSION}"
+        echo "  docker pull ${DH_PREFIX}-backend:${VERSION}"
     fi
     if [ "$BUILD_FRONTEND" = true ]; then
-        echo "  docker pull ${IMAGE_PREFIX}-frontend:${VERSION}"
+        echo "  docker pull ${DH_PREFIX}-frontend:${VERSION}"
     fi
     if [ "$BUILD_AGENT" = true ]; then
-        echo "  docker pull ${IMAGE_PREFIX}-agent:${VERSION}"
+        echo "  docker pull ${DH_PREFIX}-agent:${VERSION}"
     fi
     if [ "$BUILD_ALL_IN_ONE" = true ]; then
-        echo "  docker pull ${IMAGE_PREFIX}:${VERSION}"
+        echo "  docker pull ${DH_PREFIX}:${VERSION}"
+    fi
+    echo ""
+    echo "GHCR:"
+    if [ "$BUILD_BACKEND" = true ]; then
+        echo "  docker pull ${GHCR_PREFIX}-backend:${VERSION}"
+    fi
+    if [ "$BUILD_FRONTEND" = true ]; then
+        echo "  docker pull ${GHCR_PREFIX}-frontend:${VERSION}"
+    fi
+    if [ "$BUILD_AGENT" = true ]; then
+        echo "  docker pull ${GHCR_PREFIX}-agent:${VERSION}"
+    fi
+    if [ "$BUILD_ALL_IN_ONE" = true ]; then
+        echo "  docker pull ${GHCR_PREFIX}:${VERSION}"
     fi
 else
     echo -e "${YELLOW}Images built locally (not pushed)${NC}"
     echo ""
     echo "To push manually:"
     if [ "$BUILD_BACKEND" = true ]; then
-        echo "  docker push ${IMAGE_PREFIX}-backend:${VERSION}"
+        echo "  docker push ${DH_PREFIX}-backend:${VERSION}"
+        echo "  docker push ${GHCR_PREFIX}-backend:${VERSION}"
     fi
     if [ "$BUILD_FRONTEND" = true ]; then
-        echo "  docker push ${IMAGE_PREFIX}-frontend:${VERSION}"
+        echo "  docker push ${DH_PREFIX}-frontend:${VERSION}"
+        echo "  docker push ${GHCR_PREFIX}-frontend:${VERSION}"
     fi
     if [ "$BUILD_AGENT" = true ]; then
-        echo "  docker push ${IMAGE_PREFIX}-agent:${VERSION}"
+        echo "  docker push ${DH_PREFIX}-agent:${VERSION}"
+        echo "  docker push ${GHCR_PREFIX}-agent:${VERSION}"
     fi
     if [ "$BUILD_ALL_IN_ONE" = true ]; then
-        echo "  docker push ${IMAGE_PREFIX}:${VERSION}"
+        echo "  docker push ${DH_PREFIX}:${VERSION}"
+        echo "  docker push ${GHCR_PREFIX}:${VERSION}"
     fi
 fi
 
