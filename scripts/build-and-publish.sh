@@ -37,7 +37,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Registry target. Override with REGISTRY env var for private registries.
 # Community images are published to ghcr.io/infrapilot-sh/infrapilot (public).
-IMAGE_PREFIX="${REGISTRY:-ghcr.io/tybali/infrapilot}"
+IMAGE_PREFIX="${REGISTRY:-ghcr.io/tybali/infrapilot-ce}"
 
 # Colors
 RED='\033[0;31m'
