@@ -183,7 +183,7 @@ services:
       - redis_data:/data
 
   backend:
-    image: ghcr.io/tybali/infrapilot-ce:latest
+    image: infrapilotsh/infrapilot-ce:latest
     environment:
       DATABASE_URL: postgres://infrapilot:${POSTGRES_PASSWORD:-infrapilot}@postgres:5432/infrapilot?sslmode=disable
       REDIS_URL: redis://redis:6379
