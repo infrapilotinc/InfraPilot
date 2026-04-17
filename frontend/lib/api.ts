@@ -593,6 +593,22 @@ export interface SetupLicenseResponse {
   features: string[];
 }
 
+export type DefaultPageType = "welcome" | "404" | "500" | "502" | "503" | "maintenance";
+
+export interface DefaultPage {
+  id?: string;
+  org_id?: string;
+  page_type: DefaultPageType;
+  enabled: boolean;
+  title: string;
+  heading: string;
+  message: string;
+  show_logo: boolean;
+  custom_css?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface LicenseSettingsResponse {
   valid: boolean;
   tier: string;
@@ -5908,6 +5924,40 @@ export const api = {
     fetchAPI<{ message: string }>(`/telemetry/settings`, {
       method: "PUT",
       body: JSON.stringify(data),
+    }),
+
+  // Default pages
+  getDefaultPages: () =>
+    fetchAPI<DefaultPage[]>("/settings/default-pages"),
+
+  getDefaultPage: (pageType: string) =>
+    fetchAPI<DefaultPage>(`/settings/default-pages/${pageType}`),
+
+  updateDefaultPage: (pageType: string, data: Partial<DefaultPage>) =>
+    fetchAPI<DefaultPage>(`/settings/default-pages/${pageType}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  previewDefaultPage: (pageType: string) =>
+    fetchAPI<{ html: string }>(`/settings/default-pages/${pageType}/preview`),
+
+  // Self-update (CE)
+  getVersion: () =>
+    fetch("/health")
+      .then((r) => r.json() as Promise<{ version: string; edition: string }>),
+
+  checkForUpdate: () =>
+    fetchAPI<{
+      current_version: string;
+      latest_pushed_at?: string;
+      update_available: boolean;
+      error?: string;
+    }>(`/settings/update/check`),
+
+  applyUpdate: () =>
+    fetchAPI<{ status: string; message: string }>(`/settings/update/apply`, {
+      method: "POST",
     }),
 
   // Generic fetch for custom endpoints

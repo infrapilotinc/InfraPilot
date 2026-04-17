@@ -183,7 +183,7 @@ services:
       - redis_data:/data
 
   backend:
-    image: infrapilotsh/infrapilot-ce:latest
+    image: infrapilothq/infrapilot-ce:latest
     environment:
       DATABASE_URL: postgres://infrapilot:${POSTGRES_PASSWORD:-infrapilot}@postgres:5432/infrapilot?sslmode=disable
       REDIS_URL: redis://redis:6379

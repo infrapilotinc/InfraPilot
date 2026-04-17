@@ -36,10 +36,10 @@ InfraPilot uses a multi-container architecture in production:
 |---------|-------|---------|
 | **postgres** | `postgres:16-alpine` | Database |
 | **redis** | `redis:7-alpine` | Cache & sessions |
-| **backend** | `infrapilotsh/infrapilot-ce-backend` | API server |
-| **frontend** | `infrapilotsh/infrapilot-ce-frontend` | Web dashboard |
+| **backend** | `infrapilothq/infrapilot-ce-backend` | API server |
+| **frontend** | `infrapilothq/infrapilot-ce-frontend` | Web dashboard |
 | **nginx** | `nginx:stable-alpine` | Reverse proxy (managed by agent) |
-| **agent** | `infrapilotsh/infrapilot-ce-agent` | Docker & Nginx controller |
+| **agent** | `infrapilothq/infrapilot-ce-agent` | Docker & Nginx controller |
 
 ## Quick Start
 

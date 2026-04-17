@@ -39,8 +39,8 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Registries — images are pushed to both Docker Hub and GHCR.
 # Override with env vars for private registries.
-DH_PREFIX="${DH_REGISTRY:-infrapilotsh/infrapilot-ce}"
-GHCR_PREFIX="${GHCR_REGISTRY:-ghcr.io/infrapilotsh/infrapilot-ce}"
+DH_PREFIX="${DH_REGISTRY:-infrapilothq/infrapilot-ce}"
+GHCR_PREFIX="${GHCR_REGISTRY:-ghcr.io/infrapilothq/infrapilot-ce}"
 
 # Colors
 RED='\033[0;31m'
@@ -133,13 +133,13 @@ push_both() {
     docker push "${dh_img}:${ver}"
 
     echo -e "${YELLOW}Pushing to GHCR...${NC}"
-    docker push "${ghcr_img}:${ver}"
+    docker push "${ghcr_img}:${ver}" || echo -e "${YELLOW}  ↳ GHCR push skipped (check ghcr.io/infrapilotsh org permissions)${NC}"
 
     if [ "$ver" != "latest" ]; then
         docker tag "${dh_img}:${ver}" "${dh_img}:latest"
         docker tag "${dh_img}:${ver}" "${ghcr_img}:latest"
         docker push "${dh_img}:latest"
-        docker push "${ghcr_img}:latest"
+        docker push "${ghcr_img}:latest" || echo -e "${YELLOW}  ↳ GHCR latest push skipped${NC}"
     fi
 }
 

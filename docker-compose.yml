@@ -21,7 +21,7 @@
 
 services:
   infrapilot:
-    image: infrapilotsh/infrapilot-ce:${VERSION:-latest}
+    image: infrapilothq/infrapilot-ce:${VERSION:-latest}
     build:
       context: .
       dockerfile: Dockerfile

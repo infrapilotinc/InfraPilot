@@ -329,6 +329,16 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				// License key management
 				settings.GET("/license", h.getLicenseSettings)
 				settings.PUT("/license", h.updateLicenseKey)
+
+				// Default pages
+				settings.GET("/default-pages", h.listDefaultPages)
+				settings.GET("/default-pages/:type", h.getDefaultPage)
+				settings.PUT("/default-pages/:type", h.updateDefaultPage)
+				settings.GET("/default-pages/:type/preview", h.previewDefaultPage)
+
+				// Self-update (CE only)
+				settings.GET("/update/check", h.checkForUpdate)
+				settings.POST("/update/apply", h.applyUpdate)
 			}
 
 			// SSL/TLS Management
@@ -393,6 +403,7 @@ func (h *Handler) healthCheck(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"status":  "ok",
 		"edition": "community",
+		"version": h.version,
 	})
 }
 
