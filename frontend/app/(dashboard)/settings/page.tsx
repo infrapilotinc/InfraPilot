@@ -275,11 +275,12 @@ function InfraPilotDomainSection() {
 
 function SoftwareUpdateSection() {
   const [applyResult, setApplyResult] = useState<{ status: string; message: string } | null>(null);
+  const [displayVersion, setDisplayVersion] = useState<string>("");
 
   const { data: versionInfo } = useQuery({
     queryKey: ["appVersion"],
     queryFn: () => api.getVersion(),
-    staleTime: Infinity,
+    staleTime: 5 * 60 * 1000,
   });
 
   const { data: updateInfo, isFetching, refetch } = useQuery({
@@ -288,6 +289,12 @@ function SoftwareUpdateSection() {
     enabled: false, // only fetch on demand
     retry: false,
   });
+
+  // Keep displayVersion stable — never let it go blank once we have a value
+  const resolvedVersion = versionInfo?.version || updateInfo?.current_version || "";
+  if (resolvedVersion && resolvedVersion !== displayVersion) {
+    setDisplayVersion(resolvedVersion);
+  }
 
   const applyMutation = useMutation({
     mutationFn: () => api.applyUpdate(),
@@ -328,7 +335,7 @@ function SoftwareUpdateSection() {
             <div>
               <p className="text-sm font-medium text-gray-900 dark:text-white">Current version</p>
               <p className="text-xs text-gray-500 font-mono mt-0.5">
-                {versionInfo?.version ?? updateInfo?.current_version ?? "—"}
+                {displayVersion || "—"}
               </p>
             </div>
             <button
