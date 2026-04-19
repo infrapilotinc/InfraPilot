@@ -111,19 +111,24 @@ function LoginForm() {
 
   // Check if setup is required on mount
   useEffect(() => {
+    let cancelled = false;
+
     const checkSetup = async () => {
       try {
-        const status = await api.getSetupStatus();
+        const status = await api.getSetupStatus(undefined, 5000);
+        if (cancelled) return;
         if (status.setup_required) {
           router.replace("/setup");
           return; // keep spinner visible while navigating
         }
       } catch {
-        // If setup check fails, allow login attempt
+        // Backend unreachable or timed out — show login form anyway
       }
-      setCheckingSetup(false);
+      if (!cancelled) setCheckingSetup(false);
     };
+
     checkSetup();
+    return () => { cancelled = true; };
   }, [router]);
 
   const getSSOIcon = (type: SSOProviderType) => {

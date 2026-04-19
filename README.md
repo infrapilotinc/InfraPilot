@@ -10,7 +10,8 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go" alt="Go Version"></a>
-  <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16-000000?logo=next.js" alt="Next.js"></a>
+  <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-15-000000?logo=next.js" alt="Next.js"></a>
+  <a href="https://github.com/infrapilothq/infrapilot-ce/releases"><img src="https://img.shields.io/github/v/release/infrapilothq/infrapilot-ce?label=release" alt="Latest Release"></a>
 </p>
 
 <p align="center">
@@ -61,9 +62,9 @@ InfraPilot CE is a self-hosted control plane for small teams running Dockerized 
 
 ### Traffic Analytics
 - Nginx access log ingestion via TimescaleDB
-- Real-time request rate, error rate, latency charts
+- Real-time request rate, error rate, and status-code breakdown
 - Top paths, status code distribution, client IPs
-- Per-domain filtering, 7-day retention default
+- Per-domain filtering, 24-hour rolling window
 
 ### Alerting
 - Channels: SMTP, Slack, webhooks
@@ -87,25 +88,22 @@ InfraPilot CE is a self-hosted control plane for small teams running Dockerized 
 |---------|:--:|:--:|
 | Reverse proxy + SSL | ✅ | ✅ |
 | Container & stack management | ✅ | ✅ |
-| Docker deployments + CD webhooks | ✅ | ✅ |
-| Traffic analytics (TimescaleDB) | ✅ | ✅ |
+| CD webhooks + one-step rollback | ✅ | ✅ |
+| Traffic analytics — real-time, 24h | ✅ | ✅ |
 | Alerting (SMTP / Slack / webhook) | ✅ | ✅ |
 | RBAC + MFA (TOTP) | ✅ | ✅ |
 | Log persistence | ✅ | ✅ |
+| Traffic analytics — 7-day+, geo, CSV | ❌ | ✅ |
+| Full deployment pipelines (multi-env, canary) | ❌ | ✅ |
+| Deployment audit logs | ❌ | ✅ |
+| Secrets management (AES-256-GCM) | ❌ | ✅ |
 | SSO / OIDC / SAML | ❌ | ✅ |
-| Vulnerability scanning (Trivy) | ❌ | ✅ |
-| SBOM generation & tracking | ❌ | ✅ |
-| Policy-as-code (OPA) | ❌ | ✅ |
-| Runtime security & drift detection | ❌ | ✅ |
-| Secrets hygiene scanning | ❌ | ✅ |
-| Database governance | ❌ | ✅ |
-| Code quality integration | ❌ | ✅ |
-| Security maturity scoring | ❌ | ✅ |
-| Audit logs | ❌ | ✅ |
-| Private container registry management | ❌ | ✅ |
+| CVE scanning (Trivy) + SBOM | ❌ | ✅ |
+| Compliance reporting & policy engine | ❌ | ✅ |
+| Rust agent (mTLS enrollment) | ❌ | ✅ |
 | Priority support | ❌ | ✅ |
 
-> CE is Apache 2.0 licensed and free forever. EE requires a license key — contact **enterprise@infrapilot.org**.
+> CE is Apache 2.0 licensed and free forever. EE requires a license key — contact **sales@infrapilot.org**.
 
 
 ## CE Limitations
@@ -157,49 +155,17 @@ CE is designed for a single team/organization. There is no multi-tenancy.
 - Docker 24+ and Docker Compose V2
 - 2 CPU cores, 2 GB RAM minimum
 
-### Deploy with Docker Compose (recommended)
+### Option A — All-in-one (easiest)
+
+A single container that embeds PostgreSQL, Redis, and the InfraPilot agent:
 
 ```bash
-mkdir infrapilot && cd infrapilot
+git clone https://github.com/infrapilothq/infrapilot-ce.git
+cd infrapilot-ce
 
-cat > docker-compose.yml << 'EOF'
-services:
-  postgres:
-    image: timescale/timescaledb:latest-pg16
-    environment:
-      POSTGRES_USER: infrapilot
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-infrapilot}
-      POSTGRES_DB: infrapilot
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U infrapilot"]
-      interval: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redis_data:/data
-
-  backend:
-    image: infrapilothq/infrapilot-ce:latest
-    environment:
-      DATABASE_URL: postgres://infrapilot:${POSTGRES_PASSWORD:-infrapilot}@postgres:5432/infrapilot?sslmode=disable
-      REDIS_URL: redis://redis:6379
-      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-
-volumes:
-  postgres_data:
-  redis_data:
-EOF
-
+# Set your JWT secret (required)
 export JWT_SECRET=$(openssl rand -base64 32)
+
 docker compose up -d
 ```
 
@@ -207,20 +173,42 @@ Then open **http://localhost** — you'll be prompted to create your admin accou
 
 > **Your first account gets full admin access.** No default credentials are used.
 
+### Option B — Production multi-container
+
+Separate PostgreSQL, Redis, Nginx, Backend, Frontend, and Agent containers for easier upgrades and scaling:
+
+```bash
+git clone https://github.com/infrapilothq/infrapilot-ce.git
+cd infrapilot-ce
+
+# Copy and configure environment
+cp .env.example .env
+# Edit .env: set JWT_SECRET, POSTGRES_PASSWORD, REDIS_PASSWORD
+
+docker compose -f docker-compose.prod.yml up -d
+```
+
 ### Environment Variables
 
 | Variable | Required | Description |
 |----------|:--------:|-------------|
-| `JWT_SECRET` | ✅ | Secret for signing JWT tokens |
-| `DATABASE_URL` | ✅ | PostgreSQL connection string |
-| `REDIS_URL` | ✅ | Redis connection string |
-| `ALLOWED_ORIGINS` | | CORS origins (default: same-origin) |
-| `HTTP_PORT` | | HTTP port (default: `8080`) |
-| `GRPC_PORT` | | gRPC port for agent (default: `9090`) |
+| `JWT_SECRET` | ✅ | Secret for signing JWT tokens — generate with `openssl rand -base64 32` |
+| `DATABASE_URL` | | PostgreSQL connection string (embedded if not set) |
+| `REDIS_URL` | | Redis connection string (embedded if not set) |
+| `POSTGRES_PASSWORD` | ✅ (prod) | PostgreSQL password |
+| `REDIS_PASSWORD` | ✅ (prod) | Redis password |
+| `HTTP_PORT` | | HTTP port (default: `80`) |
+| `HTTPS_PORT` | | HTTPS port (default: `443`) |
+| `LETSENCRYPT_EMAIL` | | Email for Let's Encrypt SSL certificates |
+| `LETSENCRYPT_STAGING` | | Use Let's Encrypt staging CA (default: `true`) — set to `false` for production |
+| `ALLOWED_ORIGINS` | | CORS origins (default: `http://localhost,https://localhost`) |
+| `DATA_DIR` | | Host path for persistent data (default: `./data`) |
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the complete reference.
 
 ### SSL Configuration
 
-Set `LETSENCRYPT_EMAIL` on the agent container and point your DNS at the server. Certificates are issued and renewed automatically when you create a proxy host.
+Set `LETSENCRYPT_EMAIL` and point your domain's DNS A record at the server. Certificates are issued and renewed automatically when you add a proxy host in the dashboard. Set `LETSENCRYPT_STAGING=false` once you're ready for production.
 
 
 ## Architecture
@@ -254,11 +242,13 @@ The **Agent** runs as a container, communicates with the Backend via gRPC, and i
 ## Development
 
 ```bash
-git clone https://github.com/tybali/infrapilot-ce.git
+git clone https://github.com/infrapilothq/infrapilot-ce.git
 cd infrapilot-ce
 
 docker compose -f docker-compose.dev.yml up --build
 ```
+
+Services start with hot reload: backend and agent use [Air](https://github.com/air-verse/air), frontend uses the Next.js dev server.
 
 See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for full details.
 
@@ -266,15 +256,16 @@ See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for full details.
 ## Documentation
 
 - [Development Guide](docs/DEVELOPMENT.md)
-- [Nginx Analytics](docs/NGINX-ANALYTICS.md)
-- [Stack Deployments](docs/STACK-DEPLOYMENTS.md)
-- [Proxy Management](docs/PROXY-MANAGEMENT.md)
-- [Setup Wizard](docs/SETUP-WIZARD.md)
+- [Configuration Reference](docs/CONFIGURATION.md)
+- [Proxy Management](docs/PROXY.md)
+- [Traffic Analytics](docs/ANALYTICS.md)
+- [Docker Compose Stacks](docs/STACKS.md)
+- [Alerting](docs/ALERTS.md)
 
 
 ## Contributing
 
-Contributions welcome. Please open an issue before large changes to discuss direction.
+Contributions welcome. Please open an issue before large changes to discuss direction. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
 
 
 ## Security

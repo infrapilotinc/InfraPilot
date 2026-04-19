@@ -25,10 +25,10 @@ export function FeatureGate({ feature, featureLabel, children }: FeatureGateProp
     staleTime: 60 * 1000,
   });
 
-  // Still loading — render nothing to avoid flashing gated content
+  // Still loading or errored — render nothing to avoid flashing gated content
   if (!data) return null;
 
-  if (!data.features.includes(feature)) {
+  if (!data.features?.includes(feature)) {
     return (
       <div className="flex flex-col items-center justify-center flex-1 p-12 text-center">
         <div className="w-14 h-14 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center mb-4">

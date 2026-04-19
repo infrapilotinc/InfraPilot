@@ -4,6 +4,7 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 2.x.x   | :white_check_mark: |
 | 1.x.x   | :white_check_mark: |
 | < 1.0   | :x:                |
 
@@ -25,48 +26,55 @@ We take security seriously at InfraPilot. If you discover a security vulnerabili
 - **Acknowledgment:** Within 48 hours
 - **Initial Assessment:** Within 7 days
 - **Resolution Timeline:** Depends on severity
-  - Critical: 24-48 hours
+  - Critical: 24–48 hours
   - High: 7 days
   - Medium: 30 days
   - Low: 90 days
 
 ### Security Best Practices
 
-When deploying InfraPilot:
+When deploying InfraPilot CE:
 
-1. **Change Default Credentials**
-   - Update PostgreSQL password
-   - Update Redis password
+1. **Use strong secrets**
    - Generate a strong JWT secret: `openssl rand -base64 32`
+   - Set a strong PostgreSQL password (`POSTGRES_PASSWORD`)
+   - Set a strong Redis password (`REDIS_PASSWORD`)
 
-2. **Use HTTPS in Production**
-   - Configure Let's Encrypt email
-   - Set `LETSENCRYPT_STAGING=false` for real certificates
+2. **Use HTTPS in production**
+   - Set `LETSENCRYPT_EMAIL` and point your DNS at the server
+   - Set `LETSENCRYPT_STAGING=false` for trusted certificates
 
-3. **Secure Docker Socket**
-   - The agent requires Docker socket access (read-only)
-   - Ensure the host Docker daemon is properly secured
+3. **Protect the Docker socket**
+   - The agent mounts `/var/run/docker.sock` — it needs write access to manage containers
+   - Treat the InfraPilot agent container with the same trust as root on the host
+   - Restrict who can deploy or configure InfraPilot using RBAC roles
 
-4. **Network Isolation**
-   - Internal services use an isolated Docker network
-   - Only nginx exposes ports to the host
+4. **Network isolation**
+   - Internal services communicate over an isolated Docker network
+   - Only Nginx exposes ports 80 and 443 to the host
+   - Use `ALLOWED_ORIGINS` to restrict CORS to your domain
 
-5. **Keep Updated**
-   - Regularly pull the latest images
-   - Subscribe to security advisories
+5. **Keep updated**
+   - Regularly pull the latest images: `docker compose pull && docker compose up -d`
+   - Watch [GitHub Releases](https://github.com/infrapilothq/infrapilot-ce/releases) for security patches
 
-### Security Features
+### Security Features (CE)
 
-InfraPilot includes several security features:
-
-- **No SSH Access:** All operations through Docker API
-- **mTLS Agent Communication:** Encrypted gRPC between backend and agents
-- **RBAC:** Role-based access control (super_admin, operator, viewer)
-- **MFA Support:** TOTP-based two-factor authentication
-- **Audit Logging:** Complete audit trail of all actions
-- **Security Headers:** Automatic HSTS, X-Frame-Options, CSP support
-- **Non-root Containers:** Backend and frontend run as non-root users
-- **Read-only Filesystems:** Containers use read-only root filesystems where possible
+| Feature | CE | Notes |
+|---------|:--:|-------|
+| No SSH access required | ✅ | All operations go through the Docker API |
+| RBAC (admin / operator / viewer) | ✅ | Scope access per user role |
+| MFA (TOTP) | ✅ | Google Authenticator compatible |
+| JWT with refresh token rotation | ✅ | Short-lived access tokens |
+| Security headers on proxy hosts | ✅ | HSTS, CSP, X-Frame-Options, etc. |
+| IP allowlist / denylist per proxy | ✅ | Block or restrict access by IP/CIDR |
+| Basic Auth per proxy host | ✅ | bcrypt-hashed credentials |
+| Non-root container processes | ✅ | Backend and frontend run as non-root |
+| Encrypted gRPC (TLS) | ✅ | Backend ↔ Agent communication |
+| mTLS agent enrollment | ❌ EE only | Rust agent with ECDSA P-256 certificates |
+| Audit log | ❌ EE only | Persistent audit trail of all user actions |
+| CVE scanning | ❌ EE only | Continuous Trivy scanning of deployed images |
+| Secrets management | ❌ EE only | AES-256-GCM encrypted secrets store |
 
 ## Acknowledgments
 

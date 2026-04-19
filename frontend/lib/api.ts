@@ -2,19 +2,24 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
 async function fetchAPI<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  timeoutMs = 15000
 ): Promise<T> {
   const token =
     typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   const res = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
+    signal: options.signal ?? controller.signal,
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
-  });
+  }).finally(() => clearTimeout(timer));
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: "Request failed" }));
@@ -3435,7 +3440,7 @@ export interface ServiceProgress {
 // API methods
 export const api = {
   // Setup (first-run)
-  getSetupStatus: () => fetchAPI<SetupStatusResponse>("/setup/status"),
+  getSetupStatus: (options?: RequestInit, timeoutMs?: number) => fetchAPI<SetupStatusResponse>("/setup/status", options ?? {}, timeoutMs),
 
   setupLicense: (key: string) =>
     fetchAPI<SetupLicenseResponse>("/setup/license", {

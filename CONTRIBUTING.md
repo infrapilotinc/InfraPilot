@@ -37,33 +37,23 @@ By participating in this project, you agree to maintain a respectful and inclusi
 
 1. **Fork and clone the repository**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/InfraPilot.git
-   cd InfraPilot
+   git clone https://github.com/YOUR_USERNAME/infrapilot-ce.git
+   cd infrapilot-ce
    ```
 
-2. **Start the development infrastructure**
+2. **Start the full development environment**
    ```bash
+   # Local dev with hot reload (recommended)
+   ./scripts/dev.sh dev
+
+   # Or fully containerised (no host ports)
    ./scripts/dev.sh up
    ```
 
-3. **Run the backend with hot reload**
-   ```bash
-   cd backend
-   cp .env.example .env  # Configure as needed
-   air
-   ```
-
-4. **Run the frontend**
-   ```bash
-   cd frontend
-   pnpm install
-   pnpm dev
-   ```
-
-5. **Access the application**
-   - Frontend: http://localhost:3000
-   - Backend API: http://localhost:8080
-   - gRPC: localhost:9090
+3. **Access the application** (local dev mode)
+   - Dashboard: http://localhost:3000
+   - Backend API: http://localhost:8080/api/v1
+   - Storybook: http://localhost:6006
 
 ### Project Structure
 
@@ -82,7 +72,7 @@ infrapilot/
 
 ### Reporting Bugs
 
-1. Check if the bug has already been reported in [Issues](https://github.com/devsimplex-org/InfraPilot/issues)
+1. Check if the bug has already been reported in [Issues](https://github.com/infrapilothq/infrapilot-ce/issues)
 2. If not, create a new issue with:
    - Clear, descriptive title
    - Steps to reproduce
@@ -92,7 +82,7 @@ infrapilot/
 
 ### Suggesting Features
 
-1. Check [Discussions](https://github.com/devsimplex-org/InfraPilot/discussions) for existing proposals
+1. Check [Discussions](https://github.com/infrapilothq/infrapilot-ce/discussions) for existing proposals
 2. Create a new discussion in the "Ideas" category with:
    - Problem statement
    - Proposed solution
@@ -279,13 +269,14 @@ cd backend && go test -tags=integration ./...
 ### Debugging
 
 ```bash
-# View backend logs
+# View Docker service logs
 ./scripts/dev.sh logs backend
+./scripts/dev.sh logs          # all services
 
-# View all logs
-./scripts/dev.sh logs
+# View local dev logs (dev.sh dev mode)
+./scripts/dev.sh dev:logs
 
-# Reset database
+# Reset database (destroys all data)
 ./scripts/dev.sh reset
 ```
 

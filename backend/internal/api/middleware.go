@@ -251,11 +251,15 @@ func (h *Handler) LicenseInfo(c *gin.Context) {
 		ExpiresAt  *string             `json:"expires_at"`
 		UpgradeURL string              `json:"upgrade_url"`
 	}
+	features := resp.Features
+	if features == nil {
+		features = []string{}
+	}
 	c.JSON(http.StatusOK, licenseInfoResponse{
 		Valid:      resp.Valid,
 		Tier:       resp.Tier,
 		MaxAgents:  resp.MaxAgents,
-		Features:   resp.Features,
+		Features:   features,
 		ExpiresAt:  resp.ExpiresAt,
 		UpgradeURL: "https://infrapilot.org/billing",
 	})

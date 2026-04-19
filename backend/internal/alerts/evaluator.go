@@ -51,6 +51,7 @@ type ContainerMetrics struct {
 	State         string
 	Status        string
 	RestartCount  int
+	OOMKilled     bool
 	CPUPercent    float64
 	MemoryPercent float64
 	MemoryUsage   uint64
@@ -210,10 +211,13 @@ func (e *AlertEvaluator) getContainerMetrics(ctx context.Context) ([]ContainerMe
 			}
 		}
 
-		// Get restart count from inspect
+		// Get restart count and OOM status from inspect
 		inspect, err := e.docker.ContainerInspect(ctx, c.ID)
 		if err == nil {
 			m.RestartCount = inspect.RestartCount
+			if inspect.State != nil {
+				m.OOMKilled = inspect.State.OOMKilled
+			}
 		}
 
 		metrics = append(metrics, m)
@@ -235,6 +239,8 @@ func (e *AlertEvaluator) evaluateRule(ctx context.Context, rule AlertRule, metri
 		e.evaluateHighCPU(ctx, rule, metrics)
 	case "high_memory":
 		e.evaluateHighMemory(ctx, rule, metrics)
+	case "oom_kill":
+		e.evaluateOOMKill(ctx, rule, metrics)
 	case "ssl_expiry":
 		e.evaluateSSLExpiry(ctx, rule)
 	case "high_error_rate":
@@ -247,6 +253,21 @@ func (e *AlertEvaluator) evaluateContainerCrash(ctx context.Context, rule AlertR
 		if m.State == "exited" || m.State == "dead" {
 			e.triggerAlert(ctx, rule, m.ContainerName, "critical",
 				"Container crashed or exited unexpectedly",
+				map[string]interface{}{
+					"container_id":   m.ContainerID,
+					"container_name": m.ContainerName,
+					"state":          m.State,
+					"status":         m.Status,
+				})
+		}
+	}
+}
+
+func (e *AlertEvaluator) evaluateOOMKill(ctx context.Context, rule AlertRule, metrics []ContainerMetrics) {
+	for _, m := range metrics {
+		if m.OOMKilled {
+			e.triggerAlert(ctx, rule, m.ContainerName, "critical",
+				"Container was killed by the OOM killer (out of memory)",
 				map[string]interface{}{
 					"container_id":   m.ContainerID,
 					"container_name": m.ContainerName,
