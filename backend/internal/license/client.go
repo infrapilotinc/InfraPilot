@@ -15,6 +15,14 @@ import (
 )
 
 const (
+	// CommunityModeKey is the placeholder key used when no real license key is configured.
+	// The settings handler uses this to detect that the backend is running in community mode.
+	CommunityModeKey = "IP-CE-FREE"
+
+	// SetupModeKey is the placeholder key used when the backend is running in setup mode
+	// (e.g. no valid license key has been configured yet).
+	SetupModeKey = "IP-CE-SETUP"
+
 	validationURL = "https://infrapilot.org/api/license/validate"
 	cacheDuration = 24 * time.Hour
 	graceDuration = 48 * time.Hour
@@ -287,6 +295,29 @@ func NewOfflineClient(logger *zap.Logger) *Client {
 		Tier:      "enterprise",
 		MaxAgents: -1,
 		Features:  AllFeatures(),
+	}
+	c.cachedAt = time.Now()
+	c.lastValidAt = time.Now()
+	return c
+}
+
+// NewCommunityModeClient returns a client with Community Edition limits — used when
+// no license key is configured. Community Edition is free forever; a key is only
+// needed to unlock Professional or Enterprise features.
+func NewCommunityModeClient(logger *zap.Logger) *Client {
+	logger.Info("LICENSE: running in community mode — enter a Pro/Enterprise key in Settings → License to unlock advanced features")
+	c := &Client{
+		licenseKey: "IP-CE-FREE",
+		instanceID: "community",
+		hostname:   "localhost",
+		version:    "community",
+		logger:     logger,
+	}
+	c.cached = &ValidationResponse{
+		Valid:     true,
+		Tier:      "community",
+		MaxAgents: 1,
+		Features:  CommunityFeatures(),
 	}
 	c.cachedAt = time.Now()
 	c.lastValidAt = time.Now()

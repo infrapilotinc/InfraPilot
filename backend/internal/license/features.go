@@ -18,6 +18,16 @@ const (
 	FeatureCustomIntegrations  = "custom_integrations"
 )
 
+// CommunityFeatures returns the features available in Community Edition (no key required).
+func CommunityFeatures() []string {
+	return []string{
+		FeatureCoreMonitoring,
+		FeatureBasicAlerts,
+		FeatureAdvancedAlerts,
+		FeatureStackManagement,
+	}
+}
+
 // AllFeatures returns every feature — used for offline dev mode.
 func AllFeatures() []string {
 	return []string{

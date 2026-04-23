@@ -80,25 +80,38 @@ func main() {
 	if os.Getenv("LICENSE_OFFLINE") == "true" && cfg.Env != "production" {
 		licenseClient = license.NewOfflineClient(logger)
 	} else if cfg.LicenseKey != "" {
-		// ENV var set — validate immediately (existing behaviour)
+		// ENV var set — validate immediately, but fall back to setup mode on failure
+		// so the operator can enter a new key via the UI rather than getting a crash loop.
 		licenseClient, err = license.NewClient(cfg.LicenseKey, cfg.DataDir, version, logger)
 		if err != nil {
-			logger.Fatal("Failed to initialize license client", zap.Error(err))
+			logger.Warn("Failed to initialize license client — starting in setup mode",
+				zap.Error(err))
+			licenseClient = nil
+		} else {
+			resp, validateErr := licenseClient.Validate()
+			if validateErr != nil {
+				// Network error reaching infrapilot.org — keep the client so it can
+				// retry in the background; features will be restricted until reachable.
+				logger.Warn("License validation failed at startup — features restricted until infrapilot.org is reachable",
+					zap.Error(validateErr))
+			} else if !resp.Valid {
+				// Key is explicitly rejected — drop to setup mode so the user can
+				// enter a valid key via the web UI instead of crash-looping.
+				logger.Warn("LICENSE_KEY is invalid — starting in setup mode",
+					zap.String("error", resp.Error),
+					zap.String("hint", "Visit http://localhost/setup to enter a valid license key"),
+				)
+				licenseClient = nil
+			} else {
+				logger.Info("License validated",
+					zap.String("tier", resp.Tier),
+					zap.Int("max_agents", resp.MaxAgents),
+				)
+			}
 		}
-		resp, err := licenseClient.Validate()
-		if err != nil {
-			logger.Fatal("License validation failed", zap.Error(err))
+		if licenseClient == nil {
+			licenseClient = license.NewSetupModeClient(logger)
 		}
-		if !resp.Valid {
-			logger.Fatal("Invalid license key",
-				zap.String("error", resp.Error),
-				zap.String("help", "Visit https://infrapilot.org to manage your license"),
-			)
-		}
-		logger.Info("License validated",
-			zap.String("tier", resp.Tier),
-			zap.Int("max_agents", resp.MaxAgents),
-		)
 	} else {
 		// Try to load license key from system_settings (saved via setup wizard)
 		var savedKey string
@@ -133,7 +146,6 @@ func main() {
 		}
 
 		if licenseClient == nil {
-			logger.Warn("No license key configured — starting in setup mode (complete setup at the web UI)")
 			licenseClient = license.NewSetupModeClient(logger)
 		}
 	}

@@ -4,63 +4,62 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth";
-import { CheckCircle, Circle } from "lucide-react";
 
 export default function SetupPage() {
   const router = useRouter();
   const { setTokens } = useAuthStore();
 
-  const [step, setStep] = useState<1 | 2 | null>(null);
+  const [ready, setReady] = useState(false);
+  const [step, setStep] = useState<1 | 2>(1); // 1 = license key, 2 = admin account
 
-  // License step state
+  // Step 1: license
   const [licenseKey, setLicenseKey] = useState("");
-  const [licenseResult, setLicenseResult] = useState<{
-    tier: string;
-    max_agents: number;
-  } | null>(null);
   const [licenseError, setLicenseError] = useState("");
   const [licenseLoading, setLicenseLoading] = useState(false);
 
-  // Admin step state
+  // Step 2: admin account
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [adminError, setAdminError] = useState("");
   const [adminLoading, setAdminLoading] = useState(false);
 
-  // On mount: fetch setup status to determine starting step
+  // On mount: redirect away if setup already done; skip license step if key already active
   useEffect(() => {
     api.getSetupStatus().then((status) => {
-      if (status.license_configured) {
+      if (!status.setup_required) {
+        router.replace("/login");
+      } else if (status.license_configured) {
+        // Valid license already active — skip straight to admin account step
         setStep(2);
+        setReady(true);
       } else {
-        setStep(1);
+        if (status.license_error) {
+          setLicenseError(status.license_error);
+        }
+        setReady(true);
       }
     }).catch(() => {
-      setStep(1);
+      setReady(true);
     });
-  }, []);
+  }, [router]);
 
-  const handleValidateLicense = async (e: React.FormEvent) => {
+  const handleLicenseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLicenseError("");
-    setLicenseResult(null);
     setLicenseLoading(true);
-
     try {
-      const result = await api.setupLicense(licenseKey.trim());
-      setLicenseResult({ tier: result.tier, max_agents: result.max_agents });
-      // Auto-advance to step 2 after a brief moment
-      setTimeout(() => setStep(2), 800);
+      await api.setupLicense(licenseKey.trim());
+      setStep(2);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "License validation failed";
+      const message = err instanceof Error ? err.message : "Invalid license key";
       setLicenseError(message);
     } finally {
       setLicenseLoading(false);
     }
   };
 
-  const handleCreateAdmin = async (e: React.FormEvent) => {
+  const handleAdminSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAdminError("");
 
@@ -90,7 +89,7 @@ export default function SetupPage() {
     }
   };
 
-  if (step === null) {
+  if (!ready) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-gray-950">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500" />
@@ -110,51 +109,22 @@ export default function SetupPage() {
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
               Welcome to InfraPilot
             </h1>
-            <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 rounded-full">Community Edition</span>
+            <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 rounded-full">
+              Community Edition
+            </span>
             <p className="text-gray-600 dark:text-gray-400 mt-2">
-              Complete setup to get started
+              {step === 1
+                ? "Step 1 of 2 — Activate your license"
+                : "Step 2 of 2 — Create your admin account"}
             </p>
-          </div>
-
-          {/* Progress indicator */}
-          <div className="flex items-center justify-center gap-3 mb-8">
-            <div className="flex items-center gap-2">
-              {step > 1 ? (
-                <CheckCircle className="h-5 w-5 text-green-500" />
-              ) : (
-                <Circle className={`h-5 w-5 ${step === 1 ? "text-primary-500 fill-primary-500" : "text-gray-400"}`} />
-              )}
-              <span className={`text-sm font-medium ${step === 1 ? "text-gray-900 dark:text-white" : "text-gray-500 dark:text-gray-400"}`}>
-                License Key
-              </span>
-            </div>
-            <div className="h-px w-8 bg-gray-300 dark:bg-gray-700" />
-            <div className="flex items-center gap-2">
-              <Circle className={`h-5 w-5 ${step === 2 ? "text-primary-500 fill-primary-500" : "text-gray-400"}`} />
-              <span className={`text-sm font-medium ${step === 2 ? "text-gray-900 dark:text-white" : "text-gray-500 dark:text-gray-400"}`}>
-                Admin Account
-              </span>
-            </div>
           </div>
 
           {/* Step 1: License Key */}
           {step === 1 && (
-            <form onSubmit={handleValidateLicense} className="space-y-6">
+            <form onSubmit={handleLicenseSubmit} className="space-y-5">
               {licenseError && (
                 <div className="bg-red-500/10 border border-red-500/50 text-red-600 dark:text-red-400 px-4 py-3 rounded text-sm">
                   {licenseError}
-                </div>
-              )}
-
-              {licenseResult && (
-                <div className="bg-green-500/10 border border-green-500/50 text-green-700 dark:text-green-400 px-4 py-3 rounded text-sm flex items-center gap-2">
-                  <CheckCircle className="h-4 w-4 flex-shrink-0" />
-                  <span>
-                    {licenseResult.tier.charAt(0).toUpperCase() + licenseResult.tier.slice(1)} Edition
-                    {licenseResult.max_agents > 0
-                      ? ` · ${licenseResult.max_agents} agent${licenseResult.max_agents > 1 ? "s" : ""}`
-                      : " · Unlimited agents"}
-                  </span>
                 </div>
               )}
 
@@ -179,13 +149,13 @@ export default function SetupPage() {
 
               <button
                 type="submit"
-                disabled={licenseLoading || !licenseKey.trim()}
+                disabled={licenseLoading}
                 className="w-full py-3 px-4 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-800 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
               >
-                {licenseLoading ? "Validating..." : "Validate →"}
+                {licenseLoading ? "Validating..." : "Activate License →"}
               </button>
 
-              <p className="text-center text-sm text-gray-500 dark:text-gray-400">
+              <p className="text-center text-xs text-gray-500 dark:text-gray-400">
                 Don&apos;t have a key?{" "}
                 <a
                   href="https://infrapilot.org/signup"
@@ -193,7 +163,7 @@ export default function SetupPage() {
                   rel="noopener noreferrer"
                   className="text-primary-600 dark:text-primary-400 hover:underline"
                 >
-                  Get one free at infrapilot.org/signup
+                  Get a free Community Edition key
                 </a>
               </p>
             </form>
@@ -201,7 +171,7 @@ export default function SetupPage() {
 
           {/* Step 2: Admin Account */}
           {step === 2 && (
-            <form onSubmit={handleCreateAdmin} className="space-y-6">
+            <form onSubmit={handleAdminSubmit} className="space-y-5">
               {adminError && (
                 <div className="bg-red-500/10 border border-red-500/50 text-red-600 dark:text-red-400 px-4 py-3 rounded text-sm">
                   {adminError}
@@ -272,10 +242,6 @@ export default function SetupPage() {
               >
                 {adminLoading ? "Creating Account..." : "Create Admin Account →"}
               </button>
-
-              <p className="text-center text-sm text-gray-500 dark:text-gray-400">
-                This account will have full administrative access to InfraPilot.
-              </p>
             </form>
           )}
         </div>

@@ -15,10 +15,11 @@ import (
 
 // SetupStatusResponse represents the setup status
 type SetupStatusResponse struct {
-	SetupRequired     bool `json:"setup_required"`
-	LicenseConfigured bool `json:"license_configured"`
-	AdminCreated      bool `json:"admin_created"`
-	UserCount         int  `json:"user_count"`
+	SetupRequired     bool   `json:"setup_required"`
+	LicenseConfigured bool   `json:"license_configured"`
+	AdminCreated      bool   `json:"admin_created"`
+	UserCount         int    `json:"user_count"`
+	LicenseError      string `json:"license_error,omitempty"`
 }
 
 // SetupRequest represents the initial admin setup request
@@ -42,20 +43,18 @@ func (h *Handler) getSetupStatus(c *gin.Context) {
 		return
 	}
 
-	// Check if license is already configured (env var, offline mode, or saved in DB)
-	licenseConfigured := false
-	if h.cfg.LicenseKey != "" || os.Getenv("LICENSE_OFFLINE") == "true" {
-		licenseConfigured = true
-	} else {
-		var savedKey string
-		_ = h.db.QueryRow(c.Request.Context(), `
-			SELECT setting_value->>'key' FROM system_settings
-			WHERE org_id = '00000000-0000-0000-0000-000000000001'
-			AND setting_key = 'license_key'
-		`).Scan(&savedKey)
-		if savedKey != "" {
-			licenseConfigured = true
-		}
+	// Determine if a valid license key is active.
+	// A real key is anything other than the setup/community placeholder keys.
+	currentKey := h.license.GetKey()
+	licenseConfigured := currentKey != "" &&
+		currentKey != license.CommunityModeKey &&
+		currentKey != license.SetupModeKey
+
+	// If an ENV key was explicitly set but is not valid (server fell back to setup mode),
+	// surface that error to the frontend so it can show a helpful message.
+	var licenseError string
+	if h.cfg.LicenseKey != "" && !licenseConfigured {
+		licenseError = "The configured license key is invalid or could not be validated. Please enter a valid key, or get a free Community Edition key at infrapilot.org."
 	}
 
 	c.JSON(http.StatusOK, SetupStatusResponse{
@@ -63,6 +62,7 @@ func (h *Handler) getSetupStatus(c *gin.Context) {
 		LicenseConfigured: licenseConfigured,
 		AdminCreated:      count > 0,
 		UserCount:         count,
+		LicenseError:      licenseError,
 	})
 }
 

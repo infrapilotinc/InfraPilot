@@ -582,6 +582,7 @@ export interface SetupStatusResponse {
   license_configured: boolean;
   admin_created: boolean;
   user_count: number;
+  license_error?: string;
 }
 
 export interface SetupResponse {

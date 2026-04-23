@@ -102,6 +102,7 @@ function LoginForm() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [checkingSetup, setCheckingSetup] = useState(true);
+  const [licenseWarning, setLicenseWarning] = useState<string | null>(null);
 
   // Fetch SSO providers
   const { data: ssoProviders } = useQuery({
@@ -120,6 +121,14 @@ function LoginForm() {
         if (status.setup_required) {
           router.replace("/setup");
           return; // keep spinner visible while navigating
+        }
+        // Users exist but license is not configured — show a warning banner so
+        // admins know they need to fix the license key in Settings → License.
+        if (!status.license_configured) {
+          setLicenseWarning(
+            status.license_error ||
+            "License key is not configured. Please contact your system administrator or visit Settings → License."
+          );
         }
       } catch {
         // Backend unreachable or timed out — show login form anyway
@@ -195,6 +204,20 @@ function LoginForm() {
         <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 rounded-full">Community Edition</span>
         <p className="text-gray-600 dark:text-gray-400 mt-2">Sign in to your account</p>
       </div>
+
+      {licenseWarning && (
+        <div className="mb-4 bg-yellow-500/10 border border-yellow-500/50 text-yellow-700 dark:text-yellow-400 px-4 py-3 rounded text-sm">
+          <strong>License issue:</strong> {licenseWarning}{" "}
+          <a
+            href="https://infrapilot.org/signup"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:no-underline"
+          >
+            Get a free Community Edition key
+          </a>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {error && (
