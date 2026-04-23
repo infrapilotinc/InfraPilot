@@ -15,6 +15,7 @@ import {
   Package,
   Users,
   Wrench,
+  Zap,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -217,6 +218,19 @@ export default function DashboardLayout({
             enabledFeatures={licenseInfo?.features}
           />
         </nav>
+
+        {/* Upgrade CTA */}
+        <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-800">
+          <a
+            href="https://infrapilot.org/enterprise"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 w-full px-3 py-2.5 bg-gradient-to-r from-primary-600 to-purple-600 hover:from-primary-700 hover:to-purple-700 text-white text-sm font-medium rounded-lg transition-all"
+          >
+            <Zap className="h-4 w-4 flex-shrink-0" />
+            <span>Upgrade to Pro / Enterprise</span>
+          </a>
+        </div>
 
         {/* Theme toggle */}
         <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-800">

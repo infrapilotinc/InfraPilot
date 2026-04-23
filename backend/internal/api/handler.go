@@ -82,15 +82,17 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		}
 
 		// Webhook receiver (public - uses signature verification)
+		// Gated: CD Deployments is a Professional/Enterprise feature.
 		webhooks := v1.Group("/webhooks")
 		{
-			webhooks.POST("/:id/receive", h.receiveWebhook)
+			webhooks.POST("/:id/receive", h.RequireFeature(license.FeatureCDDeployments), h.receiveWebhook)
 		}
 
 		// Protected routes
 		protected := v1.Group("")
 		protected.Use(h.AuthMiddleware())
 		protected.Use(h.OrgMiddleware())
+		cdGate := h.RequireFeature(license.FeatureCDDeployments)
 		{
 			// Agents
 			agents := protected.Group("/agents")
@@ -184,15 +186,15 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				agents.GET("/:id/logs/unified", h.getUnifiedLogsReal)
 				agents.GET("/:id/logs/stream", h.streamUnifiedLogs)
 
-				// Deployments (Epic 0: DevSecOps Foundations)
-				agents.GET("/:id/deployments", h.listDeployments)
-				agents.POST("/:id/deployments", h.RequireModifyContainers(), h.createDeployment)
-				agents.GET("/:id/deployments/:did", h.getDeployment)
-				agents.GET("/:id/deployments/:did/spine", h.getDeploymentSpine)
-				agents.POST("/:id/deployments/:did/rollback", h.RequireModifyContainers(), h.rollbackDeployment)
-				agents.POST("/:id/deployments/:did/redeploy", h.RequireModifyContainers(), h.redeployDeployment)
-				agents.DELETE("/:id/deployments/:did", h.RequireModifyContainers(), h.deleteDeployment)
-				agents.POST("/:id/deployments/sync", h.syncDeploymentStatus)
+				// Deployments & Webhooks — Professional/Enterprise only
+				agents.GET("/:id/deployments", cdGate, h.listDeployments)
+				agents.POST("/:id/deployments", cdGate, h.RequireModifyContainers(), h.createDeployment)
+				agents.GET("/:id/deployments/:did", cdGate, h.getDeployment)
+				agents.GET("/:id/deployments/:did/spine", cdGate, h.getDeploymentSpine)
+				agents.POST("/:id/deployments/:did/rollback", cdGate, h.RequireModifyContainers(), h.rollbackDeployment)
+				agents.POST("/:id/deployments/:did/redeploy", cdGate, h.RequireModifyContainers(), h.redeployDeployment)
+				agents.DELETE("/:id/deployments/:did", cdGate, h.RequireModifyContainers(), h.deleteDeployment)
+				agents.POST("/:id/deployments/sync", cdGate, h.syncDeploymentStatus)
 
 				// Managed Stacks (multi-service docker-compose deployments)
 				agents.POST("/:id/stacks/parse", h.RequireModifyContainers(), h.parseComposeYAML)
@@ -202,20 +204,19 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				agents.GET("/:id/managed-stacks/:sid/progress", h.getStackProgress)
 				agents.DELETE("/:id/managed-stacks/:sid", h.RequireModifyContainers(), h.deleteManagedStack)
 
-				// Webhooks (Epic 4: Dev Integration)
-				agents.GET("/:id/webhooks", h.listWebhooks)
-				agents.POST("/:id/webhooks", h.RequireModifyContainers(), h.createWebhook)
-				agents.GET("/:id/webhooks/:wid", h.getWebhook)
-				agents.PUT("/:id/webhooks/:wid", h.RequireModifyContainers(), h.updateWebhook)
-				agents.DELETE("/:id/webhooks/:wid", h.RequireModifyContainers(), h.deleteWebhook)
-				agents.GET("/:id/webhooks/:wid/events", h.listWebhookEvents)
-				agents.POST("/:id/webhooks/:wid/regenerate", h.RequireModifyContainers(), h.regenerateWebhookSecret)
+				agents.GET("/:id/webhooks", cdGate, h.listWebhooks)
+				agents.POST("/:id/webhooks", cdGate, h.RequireModifyContainers(), h.createWebhook)
+				agents.GET("/:id/webhooks/:wid", cdGate, h.getWebhook)
+				agents.PUT("/:id/webhooks/:wid", cdGate, h.RequireModifyContainers(), h.updateWebhook)
+				agents.DELETE("/:id/webhooks/:wid", cdGate, h.RequireModifyContainers(), h.deleteWebhook)
+				agents.GET("/:id/webhooks/:wid/events", cdGate, h.listWebhookEvents)
+				agents.POST("/:id/webhooks/:wid/regenerate", cdGate, h.RequireModifyContainers(), h.regenerateWebhookSecret)
 		}
 
-			// Services view (cross-agent)
-			protected.GET("/services", h.listServices)
-			protected.GET("/services/:name/deployments", h.listServiceDeployments)
-			protected.GET("/services/:name/current", h.getCurrentDeployment)
+			// Services view (cross-agent) — Professional/Enterprise only
+			protected.GET("/services", cdGate, h.listServices)
+			protected.GET("/services/:name/deployments", cdGate, h.listServiceDeployments)
+			protected.GET("/services/:name/current", cdGate, h.getCurrentDeployment)
 
 			// WebSocket helpers
 			protected.GET("/pulls/ws", h.pullWebSocket)

@@ -9,6 +9,7 @@ const (
 	FeatureVulnScanning        = "vulnerability_scanning"
 	FeatureCodeQuality         = "code_quality"
 	FeatureStackManagement     = "stack_management"
+	FeatureCDDeployments       = "cd_deployments"       // CI/CD webhooks, deployment history, rollback
 	FeatureDataGovernance      = "data_governance"
 	FeatureRuntimeSecurity     = "runtime_security"
 	FeatureUnlimitedAgents     = "unlimited_agents"
@@ -38,6 +39,7 @@ func AllFeatures() []string {
 		FeatureVulnScanning,
 		FeatureCodeQuality,
 		FeatureStackManagement,
+		FeatureCDDeployments,
 		FeatureDataGovernance,
 		FeatureRuntimeSecurity,
 		FeatureUnlimitedAgents,

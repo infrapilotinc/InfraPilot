@@ -156,6 +156,23 @@ func (h *Handler) RequireRole(roles ...string) gin.HandlerFunc {
 	}
 }
 
+// RequireFeature gates a route behind a license feature.
+// Returns 402 Payment Required with an upgrade URL if the feature is not active.
+func (h *Handler) RequireFeature(feature string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !h.license.HasFeature(feature) {
+			c.JSON(http.StatusPaymentRequired, gin.H{
+				"error":       "this feature requires a Professional or Enterprise license",
+				"feature":     feature,
+				"upgrade_url": "https://infrapilot.org/enterprise",
+			})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 // RequireModifyContainers checks if user can modify containers
 func (h *Handler) RequireModifyContainers() gin.HandlerFunc {
 	return func(c *gin.Context) {
