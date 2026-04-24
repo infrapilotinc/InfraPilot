@@ -273,7 +273,6 @@ export default function TrafficOverviewPage() {
             <div className="divide-y divide-gray-200 dark:divide-gray-800">
               {proxiesData && proxiesData.length > 0 ? (
                 proxiesData.slice(0, 5).map((proxy: ProxyHost) => {
-                  // Check if SSL is expiring soon
                   const isExpiringSoon = proxy.ssl_expires_at && (() => {
                     const expiresAt = new Date(proxy.ssl_expires_at!);
                     const thirtyDaysFromNow = new Date();

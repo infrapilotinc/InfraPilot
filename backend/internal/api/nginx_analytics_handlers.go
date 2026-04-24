@@ -258,14 +258,16 @@ func (h *Handler) GetTrafficAnalytics(c *gin.Context) {
 	interval := c.DefaultQuery("interval", "1h")
 
 	// Support both hours and minutes parameters
+	// CE: analytics retention is capped at 24 hours
+	const ceMaxHours = 24
 	var duration time.Duration
 	if minutesStr := c.Query("minutes"); minutesStr != "" {
 		minutes, _ := strconv.Atoi(minutesStr)
 		if minutes < 1 {
 			minutes = 5
 		}
-		if minutes > 1440 { // Max 24 hours in minutes
-			minutes = 1440
+		if minutes > ceMaxHours*60 { // Cap at 24h in CE
+			minutes = ceMaxHours * 60
 		}
 		duration = time.Duration(minutes) * time.Minute
 	} else {
@@ -273,8 +275,8 @@ func (h *Handler) GetTrafficAnalytics(c *gin.Context) {
 		if hours < 1 {
 			hours = 24
 		}
-		if hours > 720 { // Max 30 days
-			hours = 720
+		if hours > ceMaxHours { // Cap at 24h in CE
+			hours = ceMaxHours
 		}
 		duration = time.Duration(hours) * time.Hour
 	}
@@ -462,6 +464,9 @@ func (h *Handler) GetTrafficAnalyticsSummary(c *gin.Context) {
 		if hours < 1 {
 			hours = 24
 		}
+		if hours > 24 { // CE: cap at 24h
+			hours = 24
+		}
 		duration = time.Duration(hours) * time.Hour
 		durationSeconds = float64(hours * 3600)
 	}
@@ -643,6 +648,9 @@ func (h *Handler) GetTopPaths(c *gin.Context) {
 	} else {
 		hours, _ := strconv.Atoi(c.DefaultQuery("hours", "24"))
 		if hours < 1 {
+			hours = 24
+		}
+		if hours > 24 { // CE: cap at 24h
 			hours = 24
 		}
 		duration = time.Duration(hours) * time.Hour
@@ -946,8 +954,8 @@ func (h *Handler) GetLogDomains(c *gin.Context) {
 	if hours < 1 {
 		hours = 24
 	}
-	if hours > 720 {
-		hours = 720
+	if hours > 24 {
+		hours = 24
 	}
 
 	endTime := time.Now()
@@ -1104,6 +1112,9 @@ func (h *Handler) GetTopClients(c *gin.Context) {
 	} else {
 		hours, _ := strconv.Atoi(c.DefaultQuery("hours", "24"))
 		if hours < 1 {
+			hours = 24
+		}
+		if hours > 24 { // CE: cap at 24h
 			hours = 24
 		}
 		duration = time.Duration(hours) * time.Hour

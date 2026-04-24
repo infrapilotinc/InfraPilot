@@ -10,6 +10,7 @@ const (
 	FeatureCodeQuality         = "code_quality"
 	FeatureStackManagement     = "stack_management"
 	FeatureCDDeployments       = "cd_deployments"       // CI/CD webhooks, deployment history, rollback
+	FeatureTrafficAnalytics    = "traffic_analytics"    // Nginx access log analytics
 	FeatureDataGovernance      = "data_governance"
 	FeatureRuntimeSecurity     = "runtime_security"
 	FeatureUnlimitedAgents     = "unlimited_agents"
@@ -26,6 +27,8 @@ func CommunityFeatures() []string {
 		FeatureBasicAlerts,
 		FeatureAdvancedAlerts,
 		FeatureStackManagement,
+		FeatureCDDeployments,
+		FeatureTrafficAnalytics,
 	}
 }
 
