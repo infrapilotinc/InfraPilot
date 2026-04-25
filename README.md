@@ -8,10 +8,10 @@
 <h1 align="center">InfraPilot Community Edition</h1>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License"></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go" alt="Go Version"></a>
   <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-15-000000?logo=next.js" alt="Next.js"></a>
-  <a href="https://github.com/infrapilothq/infrapilot-ce/releases"><img src="https://img.shields.io/github/v/release/infrapilothq/infrapilot-ce?label=release" alt="Latest Release"></a>
+  <a href="https://github.com/infrapilothq/InfraPilot/releases"><img src="https://img.shields.io/github/v/release/infrapilothq/InfraPilot?label=release" alt="Latest Release"></a>
 </p>
 
 <p align="center">
@@ -103,7 +103,7 @@ InfraPilot CE is a self-hosted control plane for small teams running Dockerized 
 | Rust agent (mTLS enrollment) | ❌ | ✅ |
 | Priority support | ❌ | ✅ |
 
-> CE is Apache 2.0 licensed and free forever. EE requires a license key — contact **sales@infrapilot.org**.
+> CE is AGPL-3.0 licensed and free forever. EE requires a license key — contact **sales@infrapilot.org**.
 
 
 ## CE Limitations
@@ -160,8 +160,8 @@ CE is designed for a single team/organization. There is no multi-tenancy.
 A single container that embeds PostgreSQL, Redis, and the InfraPilot agent:
 
 ```bash
-git clone https://github.com/infrapilothq/infrapilot-ce.git
-cd infrapilot-ce
+git clone https://github.com/infrapilothq/InfraPilot.git
+cd InfraPilot
 
 # Set your JWT secret (required)
 export JWT_SECRET=$(openssl rand -base64 32)
@@ -178,8 +178,8 @@ Then open **http://localhost** — you'll be prompted to create your admin accou
 Separate PostgreSQL, Redis, Nginx, Backend, Frontend, and Agent containers for easier upgrades and scaling:
 
 ```bash
-git clone https://github.com/infrapilothq/infrapilot-ce.git
-cd infrapilot-ce
+git clone https://github.com/infrapilothq/InfraPilot.git
+cd InfraPilot
 
 # Copy and configure environment
 cp .env.example .env
@@ -242,8 +242,8 @@ The **Agent** runs as a container, communicates with the Backend via gRPC, and i
 ## Development
 
 ```bash
-git clone https://github.com/infrapilothq/infrapilot-ce.git
-cd infrapilot-ce
+git clone https://github.com/infrapilothq/InfraPilot.git
+cd InfraPilot
 
 docker compose -f docker-compose.dev.yml up --build
 ```
@@ -275,7 +275,7 @@ Report vulnerabilities to **security@infrapilot.org** — do not open public iss
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE)
+AGPL-3.0 — see [LICENSE](LICENSE)
 
 ---
 

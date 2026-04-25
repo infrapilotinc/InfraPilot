@@ -31,9 +31,9 @@ FROM node:22-alpine
 # OCI Labels
 LABEL org.opencontainers.image.title="InfraPilot Frontend"
 LABEL org.opencontainers.image.description="InfraPilot Web Dashboard"
-LABEL org.opencontainers.image.source="https://github.com/devsimplex-org/infrapilot"
+LABEL org.opencontainers.image.source="https://github.com/infrapilothq/InfraPilot"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
-LABEL org.opencontainers.image.vendor="DevSimplex"
+LABEL org.opencontainers.image.vendor="InfraPilot"
 
 # Create app user
 RUN adduser -D -H -s /sbin/nologin appuser

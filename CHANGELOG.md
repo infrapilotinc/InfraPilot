@@ -107,15 +107,6 @@ CE v2.0.0 brings real-time traffic visibility, continuous deployment hooks, cont
 
 ## Enterprise Edition
 
-InfraPilot EE v2.0 is in active development. EE features include:
+InfraPilot EE adds multi-agent management, advanced analytics, deployment pipelines, secrets management, SSO/OIDC, audit logs, CVE scanning, and compliance reporting.
 
-- Rust agent (2 MB binary, mTLS enrollment)
-- Secrets management (AES-256-GCM, per-org keys, version history)
-- Advanced analytics (7-day+ retention, IP geolocation, CSV exports)
-- Full deployment pipelines (version history, multi-environment promotion, canary/blue-green)
-- Deployment audit logs
-- SSO / SAML / OIDC
-- Continuous CVE scanning (Trivy) and SBOM generation
-- Compliance reporting and policy engine
-
-Contact **sales@infrapilot.org** for EE access.
+Contact **sales@infrapilot.org** for EE access or visit [infrapilot.org](https://infrapilot.org).

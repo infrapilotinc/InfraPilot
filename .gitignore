@@ -56,3 +56,7 @@ backend/tmp
 *storybook.log
 storybook-static
 .dev-logs.env.prod
+
+# Backup files
+*.bak
+*.orig

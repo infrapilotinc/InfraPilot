@@ -31,9 +31,9 @@ FROM alpine:3.21
 # OCI Labels
 LABEL org.opencontainers.image.title="InfraPilot Agent"
 LABEL org.opencontainers.image.description="InfraPilot Host Agent for Docker and Nginx management"
-LABEL org.opencontainers.image.source="https://github.com/devsimplex-org/infrapilot"
+LABEL org.opencontainers.image.source="https://github.com/infrapilothq/InfraPilot"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
-LABEL org.opencontainers.image.vendor="DevSimplex"
+LABEL org.opencontainers.image.vendor="InfraPilot"
 
 # Install runtime dependencies
 RUN apk add --no-cache \
