@@ -4098,6 +4098,34 @@ export const api = {
     return data;
   },
 
+  uploadSSLCertificate: async (data: {
+    cert_pem: string;
+    key_pem: string;
+    agent_id?: string;
+    proxy_id?: string;
+  }): Promise<{
+    cert_path: string;
+    key_path: string;
+    domain: string;
+    issuer: string;
+    expires_at: string;
+    sans: string[];
+    is_wildcard: boolean;
+    message?: string;
+    error?: string;
+  }> => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
+    const res = await fetch(`${API_BASE}/ssl/upload`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
+    });
+    return res.json();
+  },
+
   getDNSInstructions: (domain: string) =>
     fetchAPI<DNSInstructions>(`/ssl/dns-instructions/${encodeURIComponent(domain)}`),
 

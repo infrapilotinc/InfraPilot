@@ -1,6 +1,12 @@
 package api
 
 import (
+	"bytes"
+	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -1501,6 +1507,254 @@ func (h *Handler) verifyDNSTXTRecord(c *gin.Context) {
 		"found":    records,
 		"expected": expectedValue,
 	})
+}
+
+// uploadSSLCertificate accepts raw PEM certificate + key content, validates them,
+// writes them to disk, and optionally applies them to a proxy host.
+// POST /api/v1/ssl/upload
+func (h *Handler) uploadSSLCertificate(c *gin.Context) {
+	orgID := c.MustGet("org_id").(uuid.UUID)
+
+	var req struct {
+		CertPEM string `json:"cert_pem" binding:"required"`
+		KeyPEM  string `json:"key_pem" binding:"required"`
+		AgentID string `json:"agent_id"`
+		ProxyID string `json:"proxy_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Size limits — 64 KB each
+	const maxPEMSize = 64 * 1024
+	if len(req.CertPEM) > maxPEMSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "certificate too large (max 64 KB)"})
+		return
+	}
+	if len(req.KeyPEM) > maxPEMSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "private key too large (max 64 KB)"})
+		return
+	}
+
+	// Validate and parse certificate
+	certInfo, cert, err := validateUploadedCertPEM([]byte(req.CertPEM))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid certificate: %v", err)})
+		return
+	}
+
+	// Validate and parse private key
+	privKey, err := validateUploadedKeyPEM([]byte(req.KeyPEM))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid private key: %v", err)})
+		return
+	}
+
+	// Verify the private key matches the certificate's public key
+	if err := verifyCertKeyMatch(cert, privKey); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "private key does not match the certificate"})
+		return
+	}
+
+	// Determine domain for directory name
+	domain := certInfo.Subject
+	if len(certInfo.SANs) > 0 {
+		domain = certInfo.SANs[0]
+	}
+	cleanDomain := strings.TrimPrefix(domain, "*.")
+	// Sanitise directory component — only allow hostname chars
+	for _, ch := range cleanDomain {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+			(ch >= '0' && ch <= '9') || ch == '-' || ch == '.') {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "certificate domain contains invalid characters"})
+			return
+		}
+	}
+
+	// Save to /data/certs/<domain>/
+	certDir := filepath.Join("/data/certs", cleanDomain)
+	if err := os.MkdirAll(certDir, 0700); err != nil {
+		h.logger.Error("Failed to create cert directory", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create certificate directory"})
+		return
+	}
+
+	certPath := filepath.Join(certDir, "fullchain.pem")
+	keyPath := filepath.Join(certDir, "privkey.pem")
+
+	if err := os.WriteFile(certPath, []byte(strings.TrimSpace(req.CertPEM)+"\n"), 0644); err != nil {
+		h.logger.Error("Failed to write certificate", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save certificate"})
+		return
+	}
+	if err := os.WriteFile(keyPath, []byte(strings.TrimSpace(req.KeyPEM)+"\n"), 0600); err != nil {
+		os.Remove(certPath)
+		h.logger.Error("Failed to write private key", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save private key"})
+		return
+	}
+
+	h.logger.Info("Custom SSL certificate uploaded",
+		zap.String("domain", domain),
+		zap.String("issuer", certInfo.Issuer),
+		zap.Time("expires_at", certInfo.ExpiresAt),
+	)
+
+	// Optionally apply directly to a proxy host
+	if req.AgentID != "" && req.ProxyID != "" {
+		agentID, err1 := uuid.Parse(req.AgentID)
+		proxyID, err2 := uuid.Parse(req.ProxyID)
+		if err1 == nil && err2 == nil {
+			var proxyDomain, upstream string
+			err = h.db.QueryRow(c.Request.Context(), `
+				SELECT ph.domain, ph.upstream_target
+				FROM proxy_hosts ph
+				JOIN agents a ON ph.agent_id = a.id
+				WHERE ph.id = $1 AND ph.agent_id = $2 AND a.org_id = $3
+			`, proxyID, agentID, orgID).Scan(&proxyDomain, &upstream)
+
+			if err == nil {
+				_, err = h.db.Exec(c.Request.Context(), `
+					UPDATE proxy_hosts SET
+						ssl_enabled   = true,
+						force_ssl     = true,
+						http2_enabled = true,
+						ssl_source    = 'external',
+						ssl_cert_path = $1,
+						ssl_key_path  = $2,
+						status        = 'active',
+						updated_at    = NOW()
+					WHERE id = $3
+				`, certPath, keyPath, proxyID)
+				if err != nil {
+					h.logger.Error("Failed to update proxy SSL settings", zap.Error(err))
+				} else {
+					go h.dispatchProxyConfigWithCert(context.Background(), agentID, proxyID,
+						proxyDomain, upstream, true, true, true, certPath, keyPath)
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"cert_path":   certPath,
+		"key_path":    keyPath,
+		"domain":      domain,
+		"issuer":      certInfo.Issuer,
+		"expires_at":  certInfo.ExpiresAt.Format(time.RFC3339),
+		"sans":        certInfo.SANs,
+		"is_wildcard": certInfo.IsWildcard,
+		"message":     "Certificate uploaded and validated successfully",
+	})
+}
+
+// validateUploadedCertPEM validates and parses PEM-encoded certificate content.
+// Returns parsed CertificateInfo, the x509.Certificate, and any validation error.
+func validateUploadedCertPEM(data []byte) (*CertificateInfo, *x509.Certificate, error) {
+	data = bytes.TrimSpace(data)
+
+	// Must start with PEM certificate header — reject anything else outright
+	if !bytes.HasPrefix(data, []byte("-----BEGIN CERTIFICATE-----")) {
+		return nil, nil, fmt.Errorf("must start with -----BEGIN CERTIFICATE----- (got non-certificate PEM or binary data)")
+	}
+
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, nil, fmt.Errorf("failed to decode PEM block — check for encoding errors")
+	}
+	if block.Type != "CERTIFICATE" {
+		return nil, nil, fmt.Errorf("expected PEM type CERTIFICATE, got %q", block.Type)
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid X.509 structure: %w", err)
+	}
+
+	info := &CertificateInfo{
+		Subject:   cert.Subject.CommonName,
+		Issuer:    cert.Issuer.CommonName,
+		SANs:      cert.DNSNames,
+		ExpiresAt: cert.NotAfter,
+	}
+	for _, san := range cert.DNSNames {
+		if strings.HasPrefix(san, "*.") {
+			info.IsWildcard = true
+			break
+		}
+	}
+	return info, cert, nil
+}
+
+// validateUploadedKeyPEM validates a PEM-encoded private key.
+// Accepts PKCS#8 (PRIVATE KEY), PKCS#1 RSA (RSA PRIVATE KEY), SEC1 EC (EC PRIVATE KEY).
+// Returns the parsed key or an error — does NOT accept encrypted keys.
+func validateUploadedKeyPEM(data []byte) (crypto.PrivateKey, error) {
+	data = bytes.TrimSpace(data)
+
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block — check for encoding errors")
+	}
+
+	// Reject encrypted keys
+	if strings.Contains(block.Type, "ENCRYPTED") || block.Headers["Proc-Type"] != "" {
+		return nil, fmt.Errorf("encrypted private keys are not supported — please decrypt the key first")
+	}
+
+	switch block.Type {
+	case "PRIVATE KEY": // PKCS#8 (RSA, EC, Ed25519)
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("invalid PKCS#8 private key: %w", err)
+		}
+		return key, nil
+	case "RSA PRIVATE KEY": // PKCS#1
+		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("invalid RSA private key: %w", err)
+		}
+		return key, nil
+	case "EC PRIVATE KEY": // SEC1
+		key, err := x509.ParseECPrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("invalid EC private key: %w", err)
+		}
+		return key, nil
+	default:
+		return nil, fmt.Errorf("unsupported PEM type %q — expected PRIVATE KEY, RSA PRIVATE KEY, or EC PRIVATE KEY", block.Type)
+	}
+}
+
+// verifyCertKeyMatch checks that a private key corresponds to the certificate's public key
+// by marshalling both public keys to DER and comparing byte-for-byte.
+func verifyCertKeyMatch(cert *x509.Certificate, privKey crypto.PrivateKey) error {
+	var privPub crypto.PublicKey
+	switch k := privKey.(type) {
+	case *rsa.PrivateKey:
+		privPub = &k.PublicKey
+	case *ecdsa.PrivateKey:
+		privPub = &k.PublicKey
+	case ed25519.PrivateKey:
+		privPub = k.Public()
+	default:
+		return fmt.Errorf("unsupported private key type %T", privKey)
+	}
+
+	certPubDER, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+	if err != nil {
+		return fmt.Errorf("failed to encode certificate public key: %w", err)
+	}
+	privPubDER, err := x509.MarshalPKIXPublicKey(privPub)
+	if err != nil {
+		return fmt.Errorf("failed to encode private key public part: %w", err)
+	}
+
+	if !bytes.Equal(certPubDER, privPubDER) {
+		return fmt.Errorf("key mismatch")
+	}
+	return nil
 }
 
 // parseCertificateFile reads and parses a PEM certificate file

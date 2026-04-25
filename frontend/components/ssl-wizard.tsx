@@ -43,7 +43,7 @@ interface SSLWizardProps {
 /** Resource type for unified handling */
 type ResourceType = "proxy" | "resource" | "system";
 
-type WizardStep = "check" | "source" | "wildcard" | "dns" | "email" | "request" | "dns_challenge" | "dns_verify" | "complete";
+type WizardStep = "check" | "source" | "wildcard" | "dns" | "email" | "request" | "dns_challenge" | "dns_verify" | "upload" | "complete";
 
 export function SSLWizard({
   domain,
@@ -97,6 +97,11 @@ export function SSLWizard({
   } | null>(null);
   const [txtVerified, setTxtVerified] = useState(false);
 
+  // Custom certificate upload state
+  const [uploadCertPEM, setUploadCertPEM] = useState("");
+  const [uploadKeyPEM, setUploadKeyPEM] = useState("");
+  const [uploadValidationError, setUploadValidationError] = useState<string | null>(null);
+
   // Reset state when dialog opens/closes
   useEffect(() => {
     if (open) {
@@ -116,6 +121,9 @@ export function SSLWizard({
       setError(null);
       setDNSChallenge(null);
       setTxtVerified(false);
+      setUploadCertPEM("");
+      setUploadKeyPEM("");
+      setUploadValidationError(null);
       // Start certificate check
       checkCertificate();
     }
@@ -338,6 +346,50 @@ export function SSLWizard({
     navigator.clipboard.writeText(text);
   };
 
+  const uploadCertificate = async () => {
+    setUploadValidationError(null);
+
+    // Client-side PEM header checks before sending to server
+    const trimmedCert = uploadCertPEM.trim();
+    const trimmedKey = uploadKeyPEM.trim();
+
+    if (!trimmedCert.startsWith("-----BEGIN CERTIFICATE-----")) {
+      setUploadValidationError("Certificate must be in PEM format and start with -----BEGIN CERTIFICATE-----");
+      return;
+    }
+    const validKeyHeaders = ["-----BEGIN PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN EC PRIVATE KEY-----"];
+    if (!validKeyHeaders.some(h => trimmedKey.startsWith(h))) {
+      setUploadValidationError("Private key must be in PEM format (PRIVATE KEY, RSA PRIVATE KEY, or EC PRIVATE KEY)");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setRequestStatus("pending");
+    try {
+      const response = await api.uploadSSLCertificate({
+        cert_pem: trimmedCert,
+        key_pem: trimmedKey,
+        ...(agentId && proxyId ? { agent_id: agentId, proxy_id: proxyId } : {}),
+      });
+      if (response.error) {
+        setRequestStatus("error");
+        setError(response.error);
+        return;
+      }
+      setRequestStatus("success");
+      setResultMessage(`Certificate for ${response.domain} uploaded successfully (issued by ${response.issuer}, expires ${new Date(response.expires_at).toLocaleDateString()})`);
+      setStep("complete");
+      onSuccess?.();
+    } catch (err: unknown) {
+      setRequestStatus("error");
+      const e = err as { message?: string; error?: string };
+      setError(e?.error || e?.message || "Failed to upload certificate");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const goToStep = (newStep: WizardStep) => {
     setError(null);
     if (newStep === "wildcard") {
@@ -424,6 +476,13 @@ export function SSLWizard({
         { key: "email", label: "Email", icon: Mail },
         { key: "dns_challenge", label: "DNS TXT", icon: Globe },
         { key: "dns_verify", label: "Verify", icon: Check },
+      ];
+    }
+    if (sslSource === "external") {
+      return [
+        { key: "check", label: "Check", icon: Shield },
+        { key: "source", label: "Source", icon: FileKey },
+        { key: "upload", label: "Upload", icon: Lock },
       ];
     }
     // Let's Encrypt HTTP-01 flow
@@ -744,6 +803,38 @@ export function SSLWizard({
                     </div>
                   </div>
                 </button>
+
+                {/* Upload custom certificate option */}
+                <button
+                  onClick={() => setSSLSource("external")}
+                  className={cn(
+                    "w-full p-4 rounded-lg border text-left transition-colors",
+                    sslSource === "external"
+                      ? "border-primary-500 bg-primary-50 dark:bg-primary-900/20"
+                      : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
+                  )}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={cn(
+                      "w-5 h-5 rounded-full border-2 flex items-center justify-center mt-0.5",
+                      sslSource === "external"
+                        ? "border-primary-500"
+                        : "border-gray-300 dark:border-gray-600"
+                    )}>
+                      {sslSource === "external" && (
+                        <div className="w-2.5 h-2.5 rounded-full bg-primary-500" />
+                      )}
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900 dark:text-white">
+                        Upload custom certificate
+                      </p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                        Paste your own certificate and private key (DigiCert, Sectigo, ZeroSSL, internal CA, etc.)
+                      </p>
+                    </div>
+                  </div>
+                </button>
               </div>
 
               {/* Actions */}
@@ -758,6 +849,8 @@ export function SSLWizard({
                       goToStep("wildcard");
                     } else if (sslSource === "dns_challenge") {
                       goToStep("email");
+                    } else if (sslSource === "external") {
+                      goToStep("upload");
                     } else {
                       goToStep("dns");
                     }
@@ -765,6 +858,76 @@ export function SSLWizard({
                   icon={ArrowRight}
                 >
                   Continue
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Step: Upload Custom Certificate */}
+          {step === "upload" && (
+            <div className="space-y-4">
+              <div className="text-center mb-2">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Upload Certificate
+                </h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Paste your PEM-encoded certificate and private key below
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Certificate (PEM)
+                </label>
+                <textarea
+                  value={uploadCertPEM}
+                  onChange={(e) => { setUploadCertPEM(e.target.value); setUploadValidationError(null); }}
+                  placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"}
+                  rows={7}
+                  spellCheck={false}
+                  className="w-full px-3 py-2 font-mono text-xs bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
+                />
+                <p className="mt-1 text-xs text-gray-500">Include the full chain (cert + intermediates) if applicable</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Private Key (PEM)
+                </label>
+                <textarea
+                  value={uploadKeyPEM}
+                  onChange={(e) => { setUploadKeyPEM(e.target.value); setUploadValidationError(null); }}
+                  placeholder={"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"}
+                  rows={7}
+                  spellCheck={false}
+                  className="w-full px-3 py-2 font-mono text-xs bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
+                />
+                <p className="mt-1 text-xs text-gray-500">Unencrypted key only — RSA, EC, and PKCS#8 supported</p>
+              </div>
+
+              {uploadValidationError && (
+                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">
+                  {uploadValidationError}
+                </div>
+              )}
+
+              {error && (
+                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">
+                  {error}
+                </div>
+              )}
+
+              <div className="flex justify-between pt-2">
+                <Button variant="secondary" onClick={() => goToStep("source")} icon={ArrowLeft}>
+                  Back
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={uploadCertificate}
+                  disabled={loading || !uploadCertPEM.trim() || !uploadKeyPEM.trim()}
+                  icon={loading ? Loader2 : Lock}
+                >
+                  {loading ? "Uploading..." : "Upload & Apply"}
                 </Button>
               </div>
             </div>
@@ -1391,7 +1554,7 @@ export function SSLWizard({
               <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800 text-sm text-left space-y-2">
                 <p className="flex items-center gap-2 text-green-700 dark:text-green-400">
                   <Check className="h-4 w-4" />
-                  <span>Certificate successfully issued by Let's Encrypt</span>
+                  <span>{sslSource === "external" ? "Certificate uploaded and installed" : "Certificate successfully issued by Let's Encrypt"}</span>
                 </p>
                 <p className="flex items-center gap-2 text-green-700 dark:text-green-400">
                   <Check className="h-4 w-4" />
