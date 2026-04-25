@@ -54,4 +54,4 @@ backend/tmp
 # docsx
 *storybook.log
 storybook-static
-.dev-logs
+.dev-logs.env.prod
