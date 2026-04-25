@@ -443,10 +443,13 @@ func generateInfraPilotNginxConfig(domain string, forceSSL, http2, sslEnabled bo
 				effectiveKeyPath = wildcardKeyPath
 			}
 		}
-		// If no wildcard cert found, use exact domain path
+		// If no wildcard cert found, only use exact domain path if cert actually exists
 		if effectiveCertPath == "" {
-			effectiveCertPath = fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", domain)
-			effectiveKeyPath = fmt.Sprintf("/etc/letsencrypt/live/%s/privkey.pem", domain)
+			exactCertPath := fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", domain)
+			if _, err := os.Stat(exactCertPath); err == nil {
+				effectiveCertPath = exactCertPath
+				effectiveKeyPath = fmt.Sprintf("/etc/letsencrypt/live/%s/privkey.pem", domain)
+			}
 		}
 	}
 
@@ -468,8 +471,8 @@ func generateInfraPilotNginxConfig(domain string, forceSSL, http2, sslEnabled bo
 	config.WriteString(fmt.Sprintf("    access_log /var/log/nginx/domains/%s.access.log infrapilot_analytics;\n", domain))
 	config.WriteString(fmt.Sprintf("    error_log /var/log/nginx/domains/%s.error.log warn;\n\n", domain))
 
-	if sslEnabled && forceSSL {
-		// ACME challenge must always be accessible for certificate renewals
+	if sslEnabled && forceSSL && effectiveCertPath != "" {
+		// Cert exists: ACME challenge support for renewals + redirect to HTTPS
 		config.WriteString("    # ACME challenge for Let's Encrypt (renewals)\n")
 		config.WriteString("    location /.well-known/acme-challenge/ {\n")
 		config.WriteString("        root /var/www/acme-challenge;\n")
@@ -480,12 +483,19 @@ func generateInfraPilotNginxConfig(domain string, forceSSL, http2, sslEnabled bo
 		config.WriteString("    }\n")
 		config.WriteString("}\n\n")
 	} else {
+		if sslEnabled {
+			// SSL requested but cert not yet available — serve ACME challenge for initial issuance
+			config.WriteString("    # ACME challenge for Let's Encrypt (initial issuance)\n")
+			config.WriteString("    location /.well-known/acme-challenge/ {\n")
+			config.WriteString("        root /var/www/acme-challenge;\n")
+			config.WriteString("    }\n\n")
+		}
 		writeInfraPilotLocations(&config, basicAuthEnabled, basicAuthRealm, htpasswdPath)
 		config.WriteString("}\n\n")
 	}
 
-	// HTTPS server block (if SSL enabled)
-	if sslEnabled {
+	// HTTPS server block (only if SSL enabled AND cert actually exists)
+	if sslEnabled && effectiveCertPath != "" {
 		config.WriteString("server {\n")
 		config.WriteString("    listen 443 ssl;\n")
 		config.WriteString("    listen [::]:443 ssl;\n")
