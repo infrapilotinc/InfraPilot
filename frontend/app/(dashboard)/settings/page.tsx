@@ -16,6 +16,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { SSLWizard } from "@/components/ssl-wizard";
 
 function InfraPilotDomainSection() {
   const queryClient = useQueryClient();
@@ -25,6 +26,7 @@ function InfraPilotDomainSection() {
   const [http2Enabled, setHTTP2Enabled] = useState(true);
   const [hasChanges, setHasChanges] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
+  const [showSSLWizard, setShowSSLWizard] = useState(false);
 
   const { data: domainSettings, isLoading } = useQuery({
     queryKey: ["infrapilotDomain"],
@@ -51,6 +53,9 @@ function InfraPilotDomainSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["infrapilotDomain"] });
       setHasChanges(false);
+      if (sslEnabled) {
+        setShowSSLWizard(true);
+      }
     },
   });
 
@@ -75,6 +80,7 @@ function InfraPilotDomainSection() {
   const isConfigured = domainSettings?.domain && domainSettings.domain.length > 0;
 
   return (
+    <>
     <Card>
       <Card.Header>
         <div className="flex items-center gap-3">
@@ -109,9 +115,20 @@ function InfraPilotDomainSection() {
                     </p>
                   </div>
                 </div>
-                <Badge className="bg-green-500/10 text-green-400 border-green-500/30">
-                  Active
-                </Badge>
+                <div className="flex items-center gap-2">
+                  {domainSettings.ssl_enabled && (
+                    <button
+                      onClick={() => setShowSSLWizard(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-primary-600/10 hover:bg-primary-600/20 text-primary-400 rounded-lg transition-colors"
+                    >
+                      <Lock className="h-3.5 w-3.5" />
+                      Manage SSL
+                    </button>
+                  )}
+                  <Badge className="bg-green-500/10 text-green-400 border-green-500/30">
+                    Active
+                  </Badge>
+                </div>
               </div>
             )}
 
@@ -270,6 +287,19 @@ function InfraPilotDomainSection() {
         )}
       </Card.Body>
     </Card>
+
+    {showSSLWizard && domain && (
+      <SSLWizard
+        domain={domain}
+        open={showSSLWizard}
+        onOpenChange={setShowSSLWizard}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: ["infrapilotDomain"] });
+          setShowSSLWizard(false);
+        }}
+      />
+    )}
+    </>
   );
 }
 
