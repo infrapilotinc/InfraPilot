@@ -279,4 +279,4 @@ AGPL-3.0 — see [LICENSE](LICENSE)
 
 ---
 
-<p align="center">InfraPilot CE is maintained by <a href="https://github.com/tybali">tybali</a></p>
+<p align="center">InfraPilot CE is maintained by <a href="https://infrapilot.org">Team InfraPilot</a></p>
