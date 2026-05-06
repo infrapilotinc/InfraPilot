@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <strong>Docker-native infrastructure control plane</strong> — manage traffic, containers, logs, and alerts without touching the host OS.
+  <strong>Self-Hosted Infrastructure Control Plane for Docker </strong> —  manage containers, NGINX, SSL, logs, alerts, and deployments from a single system.
 </p>
 
 <p align="center">
