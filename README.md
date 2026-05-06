@@ -284,5 +284,11 @@ AGPL-3.0 — see [LICENSE](LICENSE)
 
 ---
 <p align="center">
-  InfraPilot CE is maintained by Team InfraPilot. Official project site: <a href="https://infrapilot.org">infrapilot.org</a>
+  InfraPilot CE is maintained by the InfraPilot team.  
+  Official website: <a href="https://infrapilot.org">infrapilot.org</a>
+</p>
+
+<p align="center">
+  InfraPilot is the official product of InfraPilot.  
+  Any other domains using the InfraPilot name are not affiliated with this project.
 </p>
