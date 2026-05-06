@@ -15,7 +15,12 @@
 </p>
 
 <p align="center">
-  <strong>Self-Hosted Infrastructure Control Plane for Docker </strong> —  manage containers, NGINX, SSL, logs, alerts, and deployments from a single system.
+  <strong>Self-Hosted Infrastructure Control Plane for Docker</strong><br/>
+  Manage containers, NGINX, SSL, logs, alerts, and deployments from a single system.
+</p>
+
+<p align="center">
+  InfraPilot is developed and maintained at <a href="https://infrapilot.org">infrapilot.org</a> — official project website.
 </p>
 
 <p align="center">
@@ -278,5 +283,6 @@ Report vulnerabilities to **security@infrapilot.org** — do not open public iss
 AGPL-3.0 — see [LICENSE](LICENSE)
 
 ---
-
-<p align="center">InfraPilot CE is maintained by <a href="https://infrapilot.org">Team InfraPilot</a></p>
+<p align="center">
+  InfraPilot CE is maintained by Team InfraPilot. Official project site: <a href="https://infrapilot.org">infrapilot.org</a>
+</p>
