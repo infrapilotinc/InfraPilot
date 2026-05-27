@@ -1,0 +1,58 @@
+name: CI
+
+# Build & lint checks on every PR and on pushes to the main branches.
+# No images are pushed here — see publish.yml for releases.
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go (backend + agent)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [backend, agent]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - name: Vet & build
+        working-directory: ${{ matrix.module }}
+        run: |
+          go vet ./...
+          go build ./...
+
+  frontend:
+    name: Frontend (Next.js)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        working-directory: frontend
+        run: pnpm lint
+      - name: Build
+        working-directory: frontend
+        run: pnpm build

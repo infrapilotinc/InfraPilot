@@ -43,6 +43,11 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DH_PREFIX="${DH_REGISTRY:-infrapilothq/infrapilot-ce}"
 GHCR_PREFIX="${GHCR_REGISTRY:-ghcr.io/infrapilothq/infrapilot-ce}"
 
+# Set PUSH_DOCKERHUB=false to push to GHCR only (used by CI, which authenticates
+# to GHCR via GITHUB_TOKEN and has no Docker Hub credentials). Defaults to true
+# to preserve the original dual-registry behavior for local runs.
+PUSH_DOCKERHUB="${PUSH_DOCKERHUB:-true}"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -135,17 +140,21 @@ push_both() {
     # Tag for GHCR (Docker Hub tag already applied during build)
     docker tag "${dh_img}:${ver}" "${ghcr_img}:${ver}"
 
-    echo -e "${YELLOW}Pushing to Docker Hub...${NC}"
-    docker push "${dh_img}:${ver}"
+    if [ "$PUSH_DOCKERHUB" = true ]; then
+        echo -e "${YELLOW}Pushing to Docker Hub...${NC}"
+        docker push "${dh_img}:${ver}"
+    fi
 
     echo -e "${YELLOW}Pushing to GHCR...${NC}"
     docker push "${ghcr_img}:${ver}" || echo -e "${YELLOW}  ↳ GHCR push skipped (check ghcr.io/infrapilotsh org permissions)${NC}"
 
     if [ "$ver" != "latest" ]; then
-        docker tag "${dh_img}:${ver}" "${dh_img}:latest"
         docker tag "${dh_img}:${ver}" "${ghcr_img}:latest"
-        docker push "${dh_img}:latest"
         docker push "${ghcr_img}:latest" || echo -e "${YELLOW}  ↳ GHCR latest push skipped${NC}"
+        if [ "$PUSH_DOCKERHUB" = true ]; then
+            docker tag "${dh_img}:${ver}" "${dh_img}:latest"
+            docker push "${dh_img}:latest"
+        fi
     fi
 }
 
