@@ -66,7 +66,7 @@ services:
       DATABASE_URL: postgres://infrapilot:infrapilot@infrapilot-dev-postgres:5432/infrapilot?sslmode=disable
       REDIS_URL: redis://infrapilot-dev-redis:6379
       JWT_SECRET: dev-secret-key-for-development-only-32chars
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://localhost:3000,http://infrapilot.ce}
     volumes:
       - ./backend:/app
       - go_mod_cache:/go/pkg/mod
@@ -78,6 +78,7 @@ services:
         condition: service_healthy
     networks:
       - infrapilot-dev
+      - infrapilot-edge
 
   # =============================================================
   # Frontend (Hot Reload with Next.js Dev Server)
@@ -99,6 +100,7 @@ services:
       - backend
     networks:
       - infrapilot-dev
+      - infrapilot-edge
 
   # =============================================================
   # Agent (Hot Reload with Air)
@@ -161,6 +163,11 @@ services:
 networks:
   infrapilot-dev:
     driver: bridge
+  # External shared network with the edge router (~/DX/InfraPilot/docker-compose.edge.yml).
+  # Create it once with: docker network create infrapilot-edge
+  infrapilot-edge:
+    external: true
+    name: infrapilot-edge
 
 volumes:
   postgres_dev_data:
