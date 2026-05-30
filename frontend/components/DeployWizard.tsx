@@ -7,6 +7,7 @@ import {
   X,
   Rocket,
   Package,
+  GitBranch,
   Loader2,
   CheckCircle,
   AlertTriangle,
@@ -102,6 +103,10 @@ export function DeployWizard({
   const [tag, setTag] = useState(imageTag || "latest");
   // When no imageRepository is pre-filled, user types the full image ref here (e.g. nginx:latest)
   const [imageInput, setImageInput] = useState("");
+  // Source: deploy a prebuilt image, or build from a git repo (push-to-deploy).
+  const [sourceMode, setSourceMode] = useState<"image" | "git">("image");
+  const [gitRepo, setGitRepo] = useState("");
+  const [gitBranch, setGitBranch] = useState("main");
 
   // Step 2: Environment
   const [envVars, setEnvVars] = useState<EnvVar[]>([]);
@@ -133,6 +138,10 @@ export function DeployWizard({
   const activeAgents = agents?.filter((a) => a.status === "active") || [];
   const defaultAgent = activeAgents[0];
 
+  // Build-from-git (push-to-deploy) is available in CE. Only applies when not
+  // launched pre-filled from a specific image (the images page).
+  const isGit = sourceMode === "git" && !imageRepository;
+
   // Fetch networks for the default agent
   const { data: networks, isLoading: networksLoading } = useQuery({
     queryKey: ["networks", defaultAgent?.id],
@@ -156,6 +165,9 @@ export function DeployWizard({
       setEnvironment("dev");
       setTag(imageTag || "latest");
       setImageInput("");
+      setSourceMode("image");
+      setGitRepo("");
+      setGitBranch("main");
       setEnvVars([]);
       setSecretMethod("env_vars");
       setEnvFileContent("");
@@ -201,9 +213,9 @@ export function DeployWizard({
 
   // Generate suggested service name
   const getSuggestedServiceName = () => {
-    const src = imageRepository || imageInput;
+    const src = isGit ? gitRepo : imageRepository || imageInput;
     if (!src) return "service";
-    const parts = src.split("/");
+    const parts = src.replace(/\.git$/, "").split("/");
     const name = (parts[parts.length - 1] || "service").split(":")[0];
     return name.replace(/[^a-zA-Z0-9-]/g, "-").toLowerCase();
   };
@@ -414,7 +426,11 @@ export function DeployWizard({
   const canGoNext = () => {
     switch (currentStep) {
       case "basics":
-        return serviceName.trim() !== "" && !!defaultAgent && (!!imageRepository || imageInput.trim() !== "");
+        return (
+          serviceName.trim() !== "" &&
+          !!defaultAgent &&
+          (isGit ? gitRepo.trim() !== "" : !!imageRepository || imageInput.trim() !== "")
+        );
       case "environment":
         return envVars.every((e) => e.key.trim() !== "");
       case "networks":
@@ -501,15 +517,26 @@ export function DeployWizard({
       }));
     }
 
-    const request: CreateDeploymentRequest = {
-      service_name: serviceName.trim(),
-      environment,
-      image_repository: effectiveRepo,
-      image_tag: effectiveTag || undefined,
-      image_digest: imageDigest || undefined,
-      container_config:
-        Object.keys(containerConfig).length > 0 ? containerConfig : undefined,
-    };
+    const request: CreateDeploymentRequest = isGit
+      ? {
+          // Source build (push-to-deploy): no prebuilt image — the agent clones + builds.
+          service_name: serviceName.trim(),
+          environment,
+          image_repository: "",
+          git_repo: gitRepo.trim(),
+          git_branch: gitBranch.trim() || "main",
+          container_config:
+            Object.keys(containerConfig).length > 0 ? containerConfig : undefined,
+        }
+      : {
+          service_name: serviceName.trim(),
+          environment,
+          image_repository: effectiveRepo,
+          image_tag: effectiveTag || undefined,
+          image_digest: imageDigest || undefined,
+          container_config:
+            Object.keys(containerConfig).length > 0 ? containerConfig : undefined,
+        };
 
     deployMutation.mutate(request);
   };
@@ -563,7 +590,7 @@ export function DeployWizard({
                     </div>
                     <div>
                       <Dialog.Title className="text-lg font-semibold text-gray-900 dark:text-white">
-                        {stage === "wizard" && "Deploy Image"}
+                        {stage === "wizard" && (isGit ? "Build & Deploy from Git" : "Deploy Image")}
                         {stage === "deploying" && "Deploying..."}
                         {stage === "success" && "Deployment Created"}
                         {stage === "error" && "Deployment Failed"}
@@ -644,8 +671,43 @@ export function DeployWizard({
                             </div>
                           )}
 
-                          {/* Image input — only when not pre-filled from images page */}
+                          {/* Source toggle — prebuilt image vs build from git (push-to-deploy) */}
                           {!imageRepository && (
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                                Source
+                              </label>
+                              <div className="grid grid-cols-2 gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setSourceMode("image")}
+                                  className={cn(
+                                    "flex items-center justify-center gap-2 py-2.5 rounded-lg border text-sm font-medium transition-colors",
+                                    sourceMode === "image"
+                                      ? "border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300"
+                                      : "border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400"
+                                  )}
+                                >
+                                  <Package className="w-4 h-4" /> Prebuilt image
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setSourceMode("git")}
+                                  className={cn(
+                                    "flex items-center justify-center gap-2 py-2.5 rounded-lg border text-sm font-medium transition-colors",
+                                    sourceMode === "git"
+                                      ? "border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300"
+                                      : "border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400"
+                                  )}
+                                >
+                                  <GitBranch className="w-4 h-4" /> Build from Git
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Image input — prebuilt-image mode, not pre-filled from images page */}
+                          {!imageRepository && !isGit && (
                             <div>
                               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                                 Image <span className="text-red-500">*</span>
@@ -661,6 +723,39 @@ export function DeployWizard({
                                 Docker Hub image or full registry URL with optional tag
                               </p>
                             </div>
+                          )}
+
+                          {/* Git inputs — build-from-git mode */}
+                          {isGit && (
+                            <>
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                  Git repository URL <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                  type="text"
+                                  value={gitRepo}
+                                  onChange={(e) => setGitRepo(e.target.value)}
+                                  placeholder="https://github.com/you/app"
+                                  className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 font-mono text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                                />
+                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                  InfraPilot clones and builds (Nixpacks or your Dockerfile), then deploys — no CI required.
+                                </p>
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                  Branch
+                                </label>
+                                <input
+                                  type="text"
+                                  value={gitBranch}
+                                  onChange={(e) => setGitBranch(e.target.value)}
+                                  placeholder="main"
+                                  className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 font-mono text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                                />
+                              </div>
+                            </>
                           )}
 
                           <div>
@@ -695,7 +790,7 @@ export function DeployWizard({
                           </div>
 
                           {/* Tag field — shown when pre-filled from images page, or when imageInput has no tag */}
-                          {(imageRepository || !imageInput.includes(":")) && (
+                          {!isGit && (imageRepository || !imageInput.includes(":")) && (
                             <div>
                               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                                 Image Tag
@@ -1188,8 +1283,22 @@ export function DeployWizard({
                               <dd className="text-gray-900 dark:text-white font-medium">{serviceName}</dd>
                               <dt className="text-gray-500">Environment:</dt>
                               <dd className="text-gray-900 dark:text-white font-medium capitalize">{environment}</dd>
-                              <dt className="text-gray-500">Image:</dt>
-                              <dd className="text-gray-900 dark:text-white font-mono text-xs">{fullImageRef}</dd>
+                              {isGit ? (
+                                <>
+                                  <dt className="text-gray-500">Source:</dt>
+                                  <dd className="text-gray-900 dark:text-white font-mono text-xs flex items-center gap-1">
+                                    <GitBranch className="h-3 w-3 shrink-0" />
+                                    {gitRepo} @ {gitBranch.trim() || "main"}
+                                  </dd>
+                                  <dt className="text-gray-500">Build:</dt>
+                                  <dd className="text-gray-900 dark:text-white text-xs">Nixpacks / Dockerfile</dd>
+                                </>
+                              ) : (
+                                <>
+                                  <dt className="text-gray-500">Image:</dt>
+                                  <dd className="text-gray-900 dark:text-white font-mono text-xs">{fullImageRef}</dd>
+                                </>
+                              )}
                             </dl>
                           </div>
 
@@ -1344,10 +1453,10 @@ export function DeployWizard({
                           <Button
                             variant="primary"
                             onClick={handleDeploy}
-                            disabled={!serviceName.trim() || !defaultAgent || !effectiveRepo}
+                            disabled={!serviceName.trim() || !defaultAgent || (isGit ? !gitRepo.trim() : !effectiveRepo)}
                           >
                             <Rocket className="h-4 w-4 mr-1" />
-                            Deploy
+                            {isGit ? "Build & Deploy" : "Deploy"}
                           </Button>
                         ) : (
                           <Button variant="primary" onClick={goNext} disabled={!canGoNext()}>

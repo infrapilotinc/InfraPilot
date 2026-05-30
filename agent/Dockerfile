@@ -28,10 +28,17 @@ WORKDIR /app
 # - ca-certificates: TLS connections
 # - tzdata: timezone support
 # - docker-cli: for docker exec to manage nginx
+# - git + nixpacks: clone & build source for push-to-deploy (build from git)
+ARG NIXPACKS_VERSION=1.41.0
 RUN apk add --no-cache \
     ca-certificates \
     tzdata \
     docker-cli \
+    git \
+    curl \
+    && curl -fsSL "https://github.com/railwayapp/nixpacks/releases/download/v${NIXPACKS_VERSION}/nixpacks-v${NIXPACKS_VERSION}-x86_64-unknown-linux-musl.tar.gz" -o /tmp/nixpacks.tar.gz \
+    && tar -xzf /tmp/nixpacks.tar.gz -C /usr/local/bin nixpacks \
+    && rm /tmp/nixpacks.tar.gz \
     && rm -rf /var/cache/apk/*
 
 # Create non-root user with docker group access

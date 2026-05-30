@@ -34,6 +34,7 @@ type DeploymentInfo struct {
 	DeployedAt      *time.Time `json:"deployed_at,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
+	BuildLog        *string   `json:"build_log,omitempty"` // captured output for source builds
 }
 
 type SourceInfo struct {
@@ -160,7 +161,7 @@ func (h *Handler) getDeploymentSpine(c *gin.Context) {
 		       d.scan_result_id, d.sbom_id, d.policy_decision, d.policy_reason,
 		       d.container_id, d.container_name, d.proxy_host_id,
 		       d.webhook_event_id, d.deployed_by, d.deployed_at,
-		       d.created_at, d.updated_at,
+		       d.created_at, d.updated_at, d.build_log,
 		       u.email as deployed_by_email
 		FROM deployments d
 		LEFT JOIN users u ON d.deployed_by = u.id
@@ -177,7 +178,7 @@ func (h *Handler) getDeploymentSpine(c *gin.Context) {
 		policyDecision                                                           string
 		policyReason                                                             *string
 		containerID, containerName                                               *string
-		deployedByEmail                                                          *string
+		deployedByEmail, buildLog                                                *string
 		deployedAt                                                               *time.Time
 		createdAt, updatedAt                                                     time.Time
 	)
@@ -190,7 +191,7 @@ func (h *Handler) getDeploymentSpine(c *gin.Context) {
 		&scanResultID, &sbomID, &policyDecision, &policyReason,
 		&containerID, &containerName, &proxyHostID,
 		&webhookEventID, &deployedBy, &deployedAt,
-		&createdAt, &updatedAt,
+		&createdAt, &updatedAt, &buildLog,
 		&deployedByEmail,
 	)
 	if err != nil {
@@ -211,6 +212,7 @@ func (h *Handler) getDeploymentSpine(c *gin.Context) {
 			DeployedAt:    deployedAt,
 			CreatedAt:     createdAt,
 			UpdatedAt:     updatedAt,
+			BuildLog:      buildLog,
 		},
 		Image: DeploymentImageInfo{
 			Registry:   imageRegistry,

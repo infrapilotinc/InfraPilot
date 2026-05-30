@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -23,6 +24,7 @@ type PolicyDecision string
 
 const (
 	StatusPending     DeploymentStatus = "pending"
+	StatusBuilding    DeploymentStatus = "building"
 	StatusScanning    DeploymentStatus = "scanning"
 	StatusPolicyCheck DeploymentStatus = "policy_check"
 	StatusDeploying   DeploymentStatus = "deploying"
@@ -110,7 +112,7 @@ type DeploymentContainerConfig struct {
 type CreateDeploymentRequest struct {
 	ServiceName     string           `json:"service_name" binding:"required"`
 	Environment     string           `json:"environment" binding:"required,oneof=dev staging prod"`
-	ImageRepository string           `json:"image_repository" binding:"required"`
+	ImageRepository string           `json:"image_repository"` // optional: empty + git_repo set ⇒ source build (push-to-deploy)
 	ImageTag        *string          `json:"image_tag"`
 	ImageDigest     *string          `json:"image_digest"`
 	GitRepo         *string          `json:"git_repo"`
@@ -267,6 +269,18 @@ func (h *Handler) createDeployment(c *gin.Context) {
 		return
 	}
 
+	// Source build (push-to-deploy): no prebuilt image, build from git on the agent.
+	sourceBuild := req.ImageRepository == "" && req.GitRepo != nil && *req.GitRepo != ""
+	if req.ImageRepository == "" && !sourceBuild {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "image_repository or git_repo is required"})
+		return
+	}
+	imageRepoForInsert := req.ImageRepository
+	if sourceBuild {
+		// Placeholder satisfies the NOT NULL column; the build stage overwrites it.
+		imageRepoForInsert = "infrapilot-build/" + sanitizeImageName(req.ServiceName+"-"+req.Environment)
+	}
+
 	// Serialize container config to JSON if provided
 	var containerConfigJSON []byte
 	if req.ContainerConfig != nil {
@@ -291,7 +305,7 @@ func (h *Handler) createDeployment(c *gin.Context) {
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'pending', $16)
 		RETURNING id
 	`, orgID, agentID, req.ServiceName, req.Environment,
-		req.ImageRepository, req.ImageTag, req.ImageDigest,
+		imageRepoForInsert, req.ImageTag, req.ImageDigest,
 		req.GitRepo, req.GitBranch, req.GitCommit, req.GitPRNumber,
 		req.CIProvider, req.CIPipelineID, req.CIBuildURL,
 		userID, containerConfigJSON,
@@ -309,6 +323,33 @@ func (h *Handler) createDeployment(c *gin.Context) {
 		zap.String("environment", req.Environment),
 	)
 
+	// Register/refresh the service config so this deployment shows up as an app
+	// (the Apps list reads service_configs) and can be redeployed later. For source
+	// builds we persist git_repo/git_branch so "redeploy" rebuilds from source.
+	svcConfigJSON := containerConfigJSON
+	if len(svcConfigJSON) == 0 {
+		svcConfigJSON = []byte("{}")
+	}
+	svcImageTag := "latest"
+	if req.ImageTag != nil && *req.ImageTag != "" {
+		svcImageTag = *req.ImageTag
+	}
+	if _, sErr := h.db.Exec(c.Request.Context(), `
+		INSERT INTO service_configs
+			(org_id, agent_id, service_name, environment, image_repository, image_tag, container_config, git_repo, git_branch, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+		ON CONFLICT (org_id, agent_id, service_name, environment) DO UPDATE SET
+			image_repository = EXCLUDED.image_repository,
+			image_tag        = EXCLUDED.image_tag,
+			git_repo         = EXCLUDED.git_repo,
+			git_branch       = EXCLUDED.git_branch,
+			updated_at       = NOW()
+	`, orgID, agentID, req.ServiceName, req.Environment,
+		imageRepoForInsert, svcImageTag, svcConfigJSON, req.GitRepo, req.GitBranch,
+	); sErr != nil {
+		h.logger.Warn("failed to upsert service config for deployment", zap.Error(sErr))
+	}
+
 	// Trigger deployment pipeline asynchronously
 	imageTag := ""
 	if req.ImageTag != nil {
@@ -318,8 +359,10 @@ func (h *Handler) createDeployment(c *gin.Context) {
 	if req.ImageDigest != nil {
 		imageDigest = *req.ImageDigest
 	}
-	// Use background context for async pipeline (request context will be canceled)
-	go h.runDeploymentPipeline(context.Background(), orgID, deploymentID, req.ImageRepository, imageTag, imageDigest, req.ContainerConfig, false)
+	// Use background context for async pipeline (request context will be canceled).
+	// CE has no scanning stage, so image deploys skip straight to deploy; source
+	// builds populate their own details during the build phase.
+	go h.runDeploymentPipeline(context.Background(), orgID, deploymentID, imageRepoForInsert, imageTag, imageDigest, req.ContainerConfig, true, sourceBuild)
 
 	c.JSON(http.StatusCreated, gin.H{
 		"id":      deploymentID,
@@ -330,11 +373,12 @@ func (h *Handler) createDeployment(c *gin.Context) {
 
 // ==================== Deployment Pipeline ====================
 
-func (h *Handler) runDeploymentPipeline(ctx context.Context, orgID, deploymentID uuid.UUID, imageRepo, imageTag, imageDigest string, containerConfig *DeploymentContainerConfig, skipScanning bool) {
+func (h *Handler) runDeploymentPipeline(ctx context.Context, orgID, deploymentID uuid.UUID, imageRepo, imageTag, imageDigest string, containerConfig *DeploymentContainerConfig, skipScanning bool, sourceBuild bool) {
 	logger := h.logger.With(
 		zap.String("deployment_id", deploymentID.String()),
 		zap.String("org_id", orgID.String()),
 		zap.Bool("skip_scanning", skipScanning),
+		zap.Bool("source_build", sourceBuild),
 	)
 
 	// Build full image reference
@@ -358,6 +402,72 @@ func (h *Handler) runDeploymentPipeline(ctx context.Context, orgID, deploymentID
 		ImageDigest  string
 		GitBranch    string
 		GitCommit    string
+	}
+
+	// Phase 0: Source build (push-to-deploy). Clone + build an image on the agent
+	// from git, then run it locally (no registry). In CE this is ungated; the
+	// SAST / code-quality gates that can block a build are Enterprise-only.
+	if sourceBuild {
+		var repoURL, ref, commit string
+		var agentID uuid.UUID
+		err := h.db.QueryRow(ctx, `
+			SELECT service_name, environment, COALESCE(git_repo, ''),
+			       COALESCE(git_branch, ''), COALESCE(git_commit, ''), agent_id
+			FROM deployments WHERE id = $1
+		`, deploymentID).Scan(
+			&deployment.ServiceName, &deployment.Environment,
+			&repoURL, &ref, &commit, &agentID,
+		)
+		if err != nil || repoURL == "" {
+			h.updateDeploymentStatus(ctx, deploymentID.String(), "failed", "Source build requires a git repository")
+			return
+		}
+
+		if err := h.updateDeploymentStatus(ctx, deploymentID.String(), "building", "Building image from source"); err != nil {
+			logger.Error("Failed to set building status", zap.Error(err))
+		}
+
+		commit8 := commit
+		if len(commit8) > 8 {
+			commit8 = commit8[:8]
+		}
+		if commit8 == "" {
+			commit8 = "latest"
+		}
+		repoName := "infrapilot-build/" + sanitizeImageName(deployment.ServiceName+"-"+deployment.Environment)
+		builtTag := repoName + ":" + commit8
+
+		gitToken := h.resolveGitToken(ctx, orgID, repoURL)
+		br, berr := h.buildOnAgent(ctx, agentID, repoURL, ref, commit, builtTag, "", gitToken, nil)
+		if br != nil {
+			h.db.Exec(ctx, `UPDATE deployments SET build_log = $1 WHERE id = $2`, br.Log, deploymentID)
+		}
+		if berr != nil || br == nil || !br.Success {
+			msg := "build failed"
+			if br != nil && br.Message != "" {
+				msg = br.Message
+			} else if berr != nil {
+				msg = berr.Error()
+			}
+			logger.Error("Source build failed", zap.String("error", msg))
+			h.updateDeploymentStatus(ctx, deploymentID.String(), "failed", "Build failed: "+msg)
+			return
+		}
+
+		// Point the deployment at the locally-built image and run it without pulling.
+		h.db.Exec(ctx, `UPDATE deployments SET image_repository = $1, image_tag = $2 WHERE id = $3`,
+			repoName, commit8, deploymentID)
+		imageRef = builtTag
+		if containerConfig == nil {
+			containerConfig = &DeploymentContainerConfig{}
+		}
+		containerConfig.PullLatest = false
+
+		if err := h.updateDeploymentStatus(ctx, deploymentID.String(), "deploying", "Starting container"); err != nil {
+			logger.Error("Failed to set deploying status", zap.Error(err))
+		}
+		logger.Info("Source build complete", zap.String("image", builtTag))
+		// Fall through to the deploy step below (policyDecision stays "" → not denied).
 	}
 
 	if skipScanning {
@@ -815,7 +925,7 @@ func (h *Handler) redeployDeployment(c *gin.Context) {
 
 	// Trigger deployment pipeline asynchronously
 	go h.runDeploymentPipeline(context.Background(), orgID, newID,
-		original.ImageRepository, imageTag, imageDigest, containerConfig, req.SkipScanning)
+		original.ImageRepository, imageTag, imageDigest, containerConfig, req.SkipScanning, false)
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":      newID.String(),
@@ -1136,4 +1246,98 @@ func (h *Handler) getCurrentDeployment(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, d)
+}
+
+// ==================== Source Build (push-to-deploy) ====================
+
+// buildResult mirrors the agent's docker.BuildImageResult.
+type buildResult struct {
+	ImageRef string `json:"image_ref"`
+	ImageID  string `json:"image_id"`
+	Log      string `json:"log"`
+	Success  bool   `json:"success"`
+	Message  string `json:"message"`
+}
+
+// buildOnAgent dispatches a "build" docker command to the agent: clone the repo
+// and build a local image (Dockerfile or Nixpacks), tagged imageTag. The agent
+// returns a buildResult (carried on failure too, for the log).
+func (h *Handler) buildOnAgent(ctx context.Context, agentID uuid.UUID, repoURL, ref, commit, imageTag, dockerfilePath, gitToken string, buildArgs map[string]string) (*buildResult, error) {
+	options := map[string]interface{}{
+		"repo_url":  repoURL,
+		"ref":       ref,
+		"commit":    commit,
+		"image_tag": imageTag,
+	}
+	if dockerfilePath != "" {
+		options["dockerfile_path"] = dockerfilePath
+	}
+	if gitToken != "" {
+		options["git_token"] = gitToken
+	}
+	if len(buildArgs) > 0 {
+		options["build_args"] = buildArgs
+	}
+
+	optionsJSON, err := json.Marshal(options)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal build options: %w", err)
+	}
+
+	cmd := &agentgrpc.BackendMessage{
+		RequestId: uuid.New().String(),
+		Type:      "docker",
+		Command:   json.RawMessage(fmt.Sprintf(`{"action":"build","options":%s}`, optionsJSON)),
+	}
+
+	// Builds can take a while — generous timeout vs the 120s used for run.
+	resp, err := agentgrpc.SendCommand(agentID.String(), cmd, 15*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send build command to agent: %w", err)
+	}
+
+	result, err := resp.GetCommandResult()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse agent response: %w", err)
+	}
+
+	// The agent returns a build result on both success and failure (for logs).
+	var br buildResult
+	if len(result.Data) > 0 {
+		_ = json.Unmarshal(result.Data, &br)
+	}
+	if !result.Success {
+		if br.Message == "" {
+			br.Message = result.Message
+		}
+		return &br, fmt.Errorf("agent build failed: %s", result.Message)
+	}
+	br.Success = true
+	return &br, nil
+}
+
+// sanitizeImageName lowercases and replaces anything not valid in a docker image
+// name component with '-', so a service+env can become a local image repo.
+func sanitizeImageName(s string) string {
+	s = strings.ToLower(s)
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-._")
+	if out == "" {
+		out = "app"
+	}
+	return out
+}
+
+// resolveGitToken returns a token for private-repo clones. CE clones public repos
+// only; private-repo credential resolution is an Enterprise capability.
+func (h *Handler) resolveGitToken(_ context.Context, _ uuid.UUID, _ string) string {
+	return ""
 }

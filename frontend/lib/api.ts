@@ -998,6 +998,7 @@ export interface ServiceConfig {
   image_repository: string;
   image_tag: string;
   git_repo?: string;
+  git_branch?: string;
   webhook_id?: string;
   created_at: string;
   updated_at: string;

@@ -961,7 +961,7 @@ func (h *Handler) runStackDeploymentPipeline(ctx context.Context, orgID, stackID
 		}
 
 		// Run the deployment pipeline for this service
-		h.runDeploymentPipeline(ctx, orgID, d.ID, d.ImageRepository, imageTag, "", containerConfig, skipScanning)
+		h.runDeploymentPipeline(ctx, orgID, d.ID, d.ImageRepository, imageTag, "", containerConfig, skipScanning, false)
 
 		// Check deployment status
 		var status string

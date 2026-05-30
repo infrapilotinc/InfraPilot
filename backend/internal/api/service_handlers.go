@@ -25,6 +25,7 @@ type ServiceConfig struct {
 	ImageTag        string                     `json:"image_tag"`
 	ContainerConfig *DeploymentContainerConfig `json:"container_config,omitempty"`
 	GitRepo         *string                    `json:"git_repo,omitempty"`
+	GitBranch       *string                    `json:"git_branch,omitempty"`
 	WebhookID       *uuid.UUID                 `json:"webhook_id,omitempty"`
 	CreatedAt       time.Time                  `json:"created_at"`
 	UpdatedAt       time.Time                  `json:"updated_at"`
@@ -71,7 +72,7 @@ func (h *Handler) listServices(c *gin.Context) {
 		SELECT
 			s.id, s.org_id, s.agent_id, s.service_name, s.environment,
 			s.image_repository, s.image_tag, s.container_config,
-			s.git_repo, s.webhook_id, s.created_at, s.updated_at,
+			s.git_repo, s.git_branch, s.webhook_id, s.created_at, s.updated_at,
 			d.status, d.image_tag, d.deployed_at, d.container_name, d.container_id
 		FROM service_configs s
 		LEFT JOIN LATERAL (
@@ -99,7 +100,7 @@ func (h *Handler) listServices(c *gin.Context) {
 		if err := rows.Scan(
 			&s.ID, &s.OrgID, &s.AgentID, &s.ServiceName, &s.Environment,
 			&s.ImageRepository, &s.ImageTag, &cfgJSON,
-			&s.GitRepo, &s.WebhookID, &s.CreatedAt, &s.UpdatedAt,
+			&s.GitRepo, &s.GitBranch, &s.WebhookID, &s.CreatedAt, &s.UpdatedAt,
 			&s.Status, &s.CurrentTag, &s.DeployedAt, &s.ContainerName, &s.ContainerID,
 		); err != nil {
 			h.logger.Error("failed to scan service", zap.Error(err))
@@ -129,7 +130,7 @@ func (h *Handler) getService(c *gin.Context) {
 		SELECT
 			s.id, s.org_id, s.agent_id, s.service_name, s.environment,
 			s.image_repository, s.image_tag, s.container_config,
-			s.git_repo, s.webhook_id, s.created_at, s.updated_at,
+			s.git_repo, s.git_branch, s.webhook_id, s.created_at, s.updated_at,
 			d.status, d.image_tag, d.deployed_at, d.container_name, d.container_id
 		FROM service_configs s
 		LEFT JOIN LATERAL (
@@ -256,10 +257,10 @@ func (h *Handler) deployService(c *gin.Context) {
 	var svc ServiceConfig
 	var cfgJSON []byte
 	err := h.db.QueryRow(c.Request.Context(), `
-		SELECT id, agent_id, image_repository, image_tag, container_config
+		SELECT id, agent_id, image_repository, image_tag, container_config, git_repo, git_branch
 		FROM service_configs
 		WHERE org_id = $1 AND service_name = $2 AND environment = $3
-	`, orgID, serviceName, environment).Scan(&svc.ID, &svc.AgentID, &svc.ImageRepository, &svc.ImageTag, &cfgJSON)
+	`, orgID, serviceName, environment).Scan(&svc.ID, &svc.AgentID, &svc.ImageRepository, &svc.ImageTag, &cfgJSON, &svc.GitRepo, &svc.GitBranch)
 	if err != nil {
 		// Auto-create if caller supplied enough info
 		if req.ImageRepository == "" || req.AgentID == nil {
@@ -314,6 +315,20 @@ func (h *Handler) deployService(c *gin.Context) {
 		imageDigest = *req.ImageDigest
 	}
 
+	// A git-backed service redeploys by rebuilding from source (push-to-deploy),
+	// not by re-pulling an image. The build stage overwrites image_repository.
+	isGitService := svc.GitRepo != nil && *svc.GitRepo != ""
+
+	// Branch for the rebuild: request override, else the service's stored branch.
+	gitBranch := req.GitBranch
+	if isGitService && (gitBranch == nil || *gitBranch == "") {
+		gitBranch = svc.GitBranch
+	}
+	var gitRepo *string
+	if isGitService {
+		gitRepo = svc.GitRepo
+	}
+
 	// Insert deployment record
 	deploymentID := uuid.New()
 	cfgBytes, _ := json.Marshal(containerConfig)
@@ -321,14 +336,14 @@ func (h *Handler) deployService(c *gin.Context) {
 		INSERT INTO deployments (
 			id, org_id, agent_id, service_name, environment,
 			image_repository, image_tag, image_digest,
-			git_branch, git_commit, ci_provider, ci_build_url,
+			git_repo, git_branch, git_commit, ci_provider, ci_build_url,
 			container_config, service_config_id,
 			status, policy_decision, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending','allow',NOW(),NOW())
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending','allow',NOW(),NOW())
 	`,
 		deploymentID, orgID, svc.AgentID, serviceName, environment,
 		svc.ImageRepository, imageTag, imageDigest,
-		req.GitBranch, req.GitCommit, req.CIProvider, req.CIBuildURL,
+		gitRepo, gitBranch, req.GitCommit, req.CIProvider, req.CIBuildURL,
 		cfgBytes, svc.ID,
 	)
 	if err != nil {
@@ -337,18 +352,22 @@ func (h *Handler) deployService(c *gin.Context) {
 		return
 	}
 
-	// Also update the service's current image tag
-	_, _ = h.db.Exec(c.Request.Context(), `
-		UPDATE service_configs SET image_tag = $1, updated_at = NOW()
-		WHERE id = $2
-	`, imageTag, svc.ID)
+	// Image deploys advance the service's current tag; git rebuilds keep the
+	// source as the source of truth (the build stamps its own tag).
+	if !isGitService {
+		_, _ = h.db.Exec(c.Request.Context(), `
+			UPDATE service_configs SET image_tag = $1, updated_at = NOW()
+			WHERE id = $2
+		`, imageTag, svc.ID)
+	}
 
 	// Run the deployment pipeline (must use Background context — request context
-	// is cancelled as soon as the HTTP response is sent)
+	// is cancelled as soon as the HTTP response is sent). Git services rebuild
+	// from source; image services skip straight to deploy (CE has no scan stage).
 	go h.runDeploymentPipeline(
 		context.Background(), orgID, deploymentID,
 		svc.ImageRepository, imageTag, imageDigest,
-		containerConfig, true, // skipScanning=true for CE
+		containerConfig, true, isGitService, // skipScanning=true for CE, sourceBuild=isGitService
 	)
 
 	h.logger.Info("service deploy triggered",

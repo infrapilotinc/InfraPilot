@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -154,6 +155,7 @@ func main() {
 		nginxContainerName: cfg.NginxContainerName,
 		proxyMode:          cfg.ProxyMode,
 		grpcClient:         grpcClient,
+		dataDir:            cfg.DataDir,
 	}
 
 	// Start command stream processor
@@ -253,6 +255,7 @@ type CommandHandler struct {
 	nginxContainerName string
 	proxyMode          string // "managed" or "external"
 	grpcClient         *agentgrpc.Client
+	dataDir            string // base dir for agent state; source builds check out under dataDir/builds
 }
 
 // sendPullProgress sends a pull progress update back to the backend
@@ -1454,6 +1457,53 @@ func (h *CommandHandler) handleDockerCommand(ctx context.Context, cmd *agentgrpc
 		return &agentgrpc.CommandResult{
 			Success: true,
 			Message: "image deleted",
+		}
+
+	// ============ Source Build (push-to-deploy) ============
+	case "build":
+		repoURL := getStringOption(dockerCmd.Options, "repo_url")
+		imageTag := getStringOption(dockerCmd.Options, "image_tag")
+		if repoURL == "" || imageTag == "" {
+			return &agentgrpc.CommandResult{
+				Success: false,
+				Message: "repo_url and image_tag are required",
+			}
+		}
+		buildArgs := make(map[string]string)
+		if m, ok := dockerCmd.Options["build_args"].(map[string]interface{}); ok {
+			for k, v := range m {
+				if s, ok := v.(string); ok {
+					buildArgs[k] = s
+				}
+			}
+		}
+		buildRes, err := h.docker.BuildImage(ctx, docker.BuildImageConfig{
+			RepoURL:        repoURL,
+			Ref:            getStringOption(dockerCmd.Options, "ref"),
+			Commit:         getStringOption(dockerCmd.Options, "commit"),
+			DockerfilePath: getStringOption(dockerCmd.Options, "dockerfile_path"),
+			ImageTag:       imageTag,
+			GitToken:       getStringOption(dockerCmd.Options, "git_token"),
+			BuildArgs:      buildArgs,
+			WorkDir:        filepath.Join(h.dataDir, "builds"),
+		})
+		if err != nil {
+			// Carry the build log back even on failure for debugging.
+			var data []byte
+			if buildRes != nil {
+				data, _ = json.Marshal(buildRes)
+			}
+			return &agentgrpc.CommandResult{
+				Success: false,
+				Message: fmt.Sprintf("build failed: %v", err),
+				Data:    data,
+			}
+		}
+		data, _ := json.Marshal(buildRes)
+		return &agentgrpc.CommandResult{
+			Success: true,
+			Message: "image built",
+			Data:    data,
 		}
 
 	// ============ Container Run Operation ============
