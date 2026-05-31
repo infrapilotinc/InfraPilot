@@ -38,6 +38,19 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# Load registry credentials from .env if present, so pushes authenticate without
+# a manual `docker login`. Recognised keys (see .env.example):
+#   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN   — Docker Hub access token
+#   GHCR_USERNAME,      GHCR_TOKEN        — GitHub PAT with write:packages
+# Override the file location with ENV_FILE=/path/to/file.
+ENV_FILE="${ENV_FILE:-$PROJECT_ROOT/.env}"
+if [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
+fi
+
 # Registries — images are pushed to both Docker Hub and GHCR.
 # Override with env vars for private registries.
 DH_PREFIX="${DH_REGISTRY:-infrapilothq/infrapilot-ce}"
@@ -157,6 +170,32 @@ push_both() {
         fi
     fi
 }
+
+# Helper: authenticate to the registries before pushing, using creds from .env.
+# Falls back to any existing `docker login` session if a key is absent.
+registry_login() {
+    [ "$PUSH" = true ] || return 0
+
+    if [ "$PUSH_DOCKERHUB" = true ]; then
+        if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+            echo -e "${BLUE}→ Logging in to Docker Hub as ${DOCKERHUB_USERNAME}...${NC}"
+            echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+        else
+            echo -e "${YELLOW}  ! DOCKERHUB_USERNAME/DOCKERHUB_TOKEN not set — relying on existing 'docker login'.${NC}"
+        fi
+    fi
+
+    local ghcr_user="${GHCR_USERNAME:-${GITHUB_ACTOR:-}}"
+    local ghcr_token="${GHCR_TOKEN:-${GITHUB_TOKEN:-}}"
+    if [ -n "$ghcr_user" ] && [ -n "$ghcr_token" ]; then
+        echo -e "${BLUE}→ Logging in to ghcr.io as ${ghcr_user}...${NC}"
+        echo "${ghcr_token}" | docker login ghcr.io -u "${ghcr_user}" --password-stdin
+    else
+        echo -e "${YELLOW}  ! GHCR_USERNAME/GHCR_TOKEN not set — relying on existing 'docker login' for ghcr.io.${NC}"
+    fi
+}
+
+registry_login
 
 # =============================================================
 # Build Backend
