@@ -38,12 +38,13 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Load registry credentials from .env if present, so pushes authenticate without
-# a manual `docker login`. Recognised keys (see .env.example):
+# Load registry credentials from .developer.env if present, so pushes authenticate
+# without a manual `docker login`. This file holds the dev team's push tokens and
+# is gitignored — kept separate from the app's .env. See .developer.env.example.
 #   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN   — Docker Hub access token
 #   GHCR_USERNAME,      GHCR_TOKEN        — GitHub PAT with write:packages
 # Override the file location with ENV_FILE=/path/to/file.
-ENV_FILE="${ENV_FILE:-$PROJECT_ROOT/.env}"
+ENV_FILE="${ENV_FILE:-$PROJECT_ROOT/.developer.env}"
 if [ -f "$ENV_FILE" ]; then
     set -a
     # shellcheck disable=SC1090

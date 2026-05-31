@@ -10,6 +10,7 @@ out/
 
 # Environment files
 .env
+.developer.env
 .env.prod
 .env.local
 .env.*.local
