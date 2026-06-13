@@ -209,8 +209,6 @@ docker compose -f docker-compose.prod.yml up -d
 | `ALLOWED_ORIGINS` | | CORS origins (default: `http://localhost,https://localhost`) |
 | `DATA_DIR` | | Host path for persistent data (default: `./data`) |
 
-See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the complete reference.
-
 ### SSL Configuration
 
 Set `LETSENCRYPT_EMAIL` and point your domain's DNS A record at the server. Certificates are issued and renewed automatically when you add a proxy host in the dashboard. Set `LETSENCRYPT_STAGING=false` once you're ready for production.
@@ -255,22 +253,10 @@ docker compose -f docker-compose.dev.yml up --build
 
 Services start with hot reload: backend and agent use [Air](https://github.com/air-verse/air), frontend uses the Next.js dev server.
 
-See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for full details.
-
-
-## Documentation
-
-- [Development Guide](docs/DEVELOPMENT.md)
-- [Configuration Reference](docs/CONFIGURATION.md)
-- [Proxy Management](docs/PROXY.md)
-- [Traffic Analytics](docs/ANALYTICS.md)
-- [Docker Compose Stacks](docs/STACKS.md)
-- [Alerting](docs/ALERTS.md)
-
 
 ## Contributing
 
-Contributions welcome. Please open an issue before large changes to discuss direction. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
+Contributions welcome. Please open an issue before large changes to discuss direction.
 
 
 ## Security
