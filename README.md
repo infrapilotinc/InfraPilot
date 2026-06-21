@@ -83,6 +83,7 @@ InfraPilot CE is a self-hosted control plane for small teams running Dockerized 
 
 ### Deployments
 - Docker image deployments with rollback
+- Push-to-deploy — build directly from a Git repo (no pre-built image required)
 - Redeploy with latest image
 - Webhook triggers for CD pipelines
 
@@ -94,6 +95,7 @@ InfraPilot CE is a self-hosted control plane for small teams running Dockerized 
 | Reverse proxy + SSL | ✅ | ✅ |
 | Container & stack management | ✅ | ✅ |
 | CD webhooks + one-step rollback | ✅ | ✅ |
+| Push-to-deploy (build from Git) | ✅ | ✅ |
 | Traffic analytics — real-time, 24h | ✅ | ✅ |
 | Alerting (SMTP / Slack / webhook) | ✅ | ✅ |
 | RBAC + MFA (TOTP) | ✅ | ✅ |
@@ -127,8 +129,8 @@ CE deploys images directly without vulnerability scanning. You are responsible f
 **No audit log**
 User actions (logins, proxy changes, deployments) are not recorded to a persistent audit trail in CE.
 
-**No private registry auth**
-Image pulls are unauthenticated. To pull from a private registry, configure Docker daemon credentials directly on the host — CE cannot manage registry credentials.
+**No private registry auth at runtime**
+Runtime image pulls are unauthenticated. To pull from a private registry, configure Docker daemon credentials directly on the host — CE cannot manage registry credentials for deployments. (Registry login for the developer build-and-publish workflow is configured separately via `.developer.env`.)
 
 **No policy gates**
 Deployments are not checked against policies. There is no way to block a deploy based on image age, CVE score, or custom rules.
