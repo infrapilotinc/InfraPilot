@@ -12,6 +12,7 @@
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go" alt="Go Version"></a>
   <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-15-000000?logo=next.js" alt="Next.js"></a>
   <a href="https://github.com/infrapilothq/InfraPilot/releases"><img src="https://img.shields.io/github/v/release/infrapilothq/InfraPilot?label=release" alt="Latest Release"></a>
+  <a href="https://infrapilot.org"><img src="https://img.shields.io/badge/Website-infrapilot.org-2ea44f" alt="Website"></a>
 </p>
 
 <p align="center">
