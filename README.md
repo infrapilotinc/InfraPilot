@@ -200,6 +200,7 @@ docker compose -f docker-compose.prod.yml up -d
 | Variable | Required | Description |
 |----------|:--------:|-------------|
 | `JWT_SECRET` | ✅ | Secret for signing JWT tokens — generate with `openssl rand -base64 32` |
+| `ENCRYPTION_KEY` | | Enables credential encryption (AES-256-GCM) and webhook signature verification — 64-char hex, generate with `openssl rand -hex 32`. These features are disabled if unset |
 | `DATABASE_URL` | | PostgreSQL connection string (embedded if not set) |
 | `REDIS_URL` | | Redis connection string (embedded if not set) |
 | `POSTGRES_PASSWORD` | ✅ (prod) | PostgreSQL password |
@@ -254,6 +255,12 @@ docker compose -f docker-compose.dev.yml up --build
 ```
 
 Services start with hot reload: backend and agent use [Air](https://github.com/air-verse/air), frontend uses the Next.js dev server.
+
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) — components, gRPC data flow, and the agent model
+- [Deployment](docs/DEPLOYMENT.md) — production deployment and image publishing
 
 
 ## Contributing
