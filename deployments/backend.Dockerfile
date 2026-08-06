@@ -17,8 +17,9 @@ COPY . .
 
 # VERSION is injected by build-and-publish.sh via --build-arg
 ARG VERSION=dev
-
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+# TARGETARCH is auto-provided by buildx so the binary matches the image platform.
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
     -ldflags="-s -w -X main.version=${VERSION}" \
     -o /backend ./cmd/server
 
@@ -59,8 +60,9 @@ RUN wget -q -O /tmp/install-syft.sh https://raw.githubusercontent.com/anchore/sy
     rm /tmp/install-syft.sh && \
     syft version
 
-# Install OPA (Open Policy Agent) for policy evaluation
-RUN wget -q -O /usr/local/bin/opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static && \
+# Install OPA (Open Policy Agent) for policy evaluation — arch-matched via TARGETARCH
+ARG TARGETARCH
+RUN wget -q -O /usr/local/bin/opa "https://openpolicyagent.org/downloads/latest/opa_linux_${TARGETARCH}_static" && \
     chmod +x /usr/local/bin/opa && \
     opa version
 
