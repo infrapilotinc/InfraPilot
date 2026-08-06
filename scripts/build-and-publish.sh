@@ -76,7 +76,9 @@ BUILD_FRONTEND=true
 BUILD_AGENT=true
 BUILD_ALL_IN_ONE=true
 PUSH=true
-PLATFORM=""
+# Multi-arch by default so ARM hosts (Graviton, Ampere, Apple-Silicon Linux, Pi)
+# can pull. Override with --platform. Requires buildx + QEMU (set up automatically).
+PLATFORMS="linux/amd64,linux/arm64"
 NO_CACHE=""
 
 # Process options
@@ -120,7 +122,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --platform)
-            PLATFORM="--platform $2"
+            PLATFORMS="$2"
             shift 2
             ;;
         *)
@@ -138,37 +140,52 @@ echo -e "${GREEN}================================================${NC}"
 echo ""
 echo -e "  Version:  ${BLUE}$VERSION${NC}"
 echo -e "  Push:     ${BLUE}$PUSH${NC}"
-echo -e "  Platform: ${BLUE}${PLATFORM:-default}${NC}"
+echo -e "  Platform: ${BLUE}${PLATFORMS}${NC}"
 echo -e "  Docker Hub: ${BLUE}${DH_PREFIX}${NC}"
 echo -e "  GHCR:       ${BLUE}${GHCR_PREFIX}${NC}"
 echo ""
 
-# Helper: tag and push an image to both registries
-push_both() {
-    local name="$1"    # e.g. "-backend" or ""
-    local ver="$2"     # e.g. "v1.0.0"
+# Ensure a buildx builder with the docker-container driver exists (required for
+# multi-arch) and register QEMU so one host arch can cross-build the other.
+ensure_builder() {
+    if ! docker buildx inspect infrapilot-builder >/dev/null 2>&1; then
+        echo -e "${BLUE}→ Creating buildx builder 'infrapilot-builder'...${NC}"
+        docker buildx create --name infrapilot-builder --driver docker-container --use >/dev/null
+    else
+        docker buildx use infrapilot-builder
+    fi
+    # Idempotent; installs binfmt handlers for cross-arch emulation.
+    docker run --privileged --rm tonistiigi/binfmt --install all >/dev/null 2>&1 || true
+}
 
-    local dh_img="${DH_PREFIX}${name}"
-    local ghcr_img="${GHCR_PREFIX}${name}"
+# Build one image for all target platforms and push a multi-arch manifest to both
+# registries in a SINGLE invocation. Plain `docker build` + `docker push` can only
+# emit a single-arch image — which is exactly why arm64 pulls failed. With --no-push
+# there is no local multi-arch image, so we build the host arch and --load it.
+#   $1 name suffix ("" | "-backend" | ...)   $2 dockerfile   $3 context   $4.. extra build args
+buildx_image() {
+    local name="$1" dockerfile="$2" context="$3"; shift 3
+    local dh="${DH_PREFIX}${name}" ghcr="${GHCR_PREFIX}${name}"
 
-    # Tag for GHCR (Docker Hub tag already applied during build)
-    docker tag "${dh_img}:${ver}" "${ghcr_img}:${ver}"
-
-    if [ "$PUSH_DOCKERHUB" = true ]; then
-        echo -e "${YELLOW}Pushing to Docker Hub...${NC}"
-        docker push "${dh_img}:${ver}"
+    local tags=()
+    [ "$PUSH_DOCKERHUB" = true ] && tags+=(-t "${dh}:${VERSION}")
+    tags+=(-t "${ghcr}:${VERSION}")
+    if [ "$VERSION" != "latest" ]; then
+        [ "$PUSH_DOCKERHUB" = true ] && tags+=(-t "${dh}:latest")
+        tags+=(-t "${ghcr}:latest")
     fi
 
-    echo -e "${YELLOW}Pushing to GHCR...${NC}"
-    docker push "${ghcr_img}:${ver}" || echo -e "${YELLOW}  ↳ GHCR push skipped (check ghcr.io/infrapilotsh org permissions)${NC}"
-
-    if [ "$ver" != "latest" ]; then
-        docker tag "${dh_img}:${ver}" "${ghcr_img}:latest"
-        docker push "${ghcr_img}:latest" || echo -e "${YELLOW}  ↳ GHCR latest push skipped${NC}"
-        if [ "$PUSH_DOCKERHUB" = true ]; then
-            docker tag "${dh_img}:${ver}" "${dh_img}:latest"
-            docker push "${dh_img}:latest"
-        fi
+    if [ "$PUSH" = true ]; then
+        docker buildx build \
+            --platform "$PLATFORMS" $NO_CACHE "$@" \
+            "${tags[@]}" --push \
+            -f "$dockerfile" "$context"
+    else
+        echo -e "${YELLOW}  (--no-push: building host arch only — multi-arch can't load locally)${NC}"
+        docker buildx build \
+            $NO_CACHE "$@" \
+            -t "${dh}:${VERSION}" --load \
+            -f "$dockerfile" "$context"
     fi
 }
 
@@ -197,22 +214,14 @@ registry_login() {
 }
 
 registry_login
+ensure_builder
 
 # =============================================================
 # Build Backend
 # =============================================================
 if [ "$BUILD_BACKEND" = true ]; then
     echo -e "${YELLOW}Building Backend API...${NC}"
-    docker build \
-        $PLATFORM $NO_CACHE \
-        --build-arg VERSION="${VERSION}" \
-        -t "${DH_PREFIX}-backend:${VERSION}" \
-        -f deployments/backend.Dockerfile \
-        ./backend
-
-    if [ "$PUSH" = true ]; then
-        push_both "-backend" "${VERSION}"
-    fi
+    buildx_image "-backend" deployments/backend.Dockerfile ./backend --build-arg VERSION="${VERSION}"
     echo -e "${GREEN}✓ Backend complete${NC}"
     echo ""
 fi
@@ -222,15 +231,7 @@ fi
 # =============================================================
 if [ "$BUILD_FRONTEND" = true ]; then
     echo -e "${YELLOW}Building Frontend Dashboard...${NC}"
-    docker build \
-        $PLATFORM $NO_CACHE \
-        -t "${DH_PREFIX}-frontend:${VERSION}" \
-        -f deployments/frontend.Dockerfile \
-        ./frontend
-
-    if [ "$PUSH" = true ]; then
-        push_both "-frontend" "${VERSION}"
-    fi
+    buildx_image "-frontend" deployments/frontend.Dockerfile ./frontend
     echo -e "${GREEN}✓ Frontend complete${NC}"
     echo ""
 fi
@@ -240,15 +241,7 @@ fi
 # =============================================================
 if [ "$BUILD_AGENT" = true ]; then
     echo -e "${YELLOW}Building Agent Controller...${NC}"
-    docker build \
-        $PLATFORM $NO_CACHE \
-        -t "${DH_PREFIX}-agent:${VERSION}" \
-        -f deployments/agent.Dockerfile \
-        ./agent
-
-    if [ "$PUSH" = true ]; then
-        push_both "-agent" "${VERSION}"
-    fi
+    buildx_image "-agent" deployments/agent.Dockerfile ./agent
     echo -e "${GREEN}✓ Agent complete${NC}"
     echo ""
 fi
@@ -258,16 +251,7 @@ fi
 # =============================================================
 if [ "$BUILD_ALL_IN_ONE" = true ]; then
     echo -e "${YELLOW}Building All-in-One (legacy)...${NC}"
-    docker build \
-        $PLATFORM $NO_CACHE \
-        --build-arg VERSION="${VERSION}" \
-        -t "${DH_PREFIX}:${VERSION}" \
-        -f Dockerfile \
-        .
-
-    if [ "$PUSH" = true ]; then
-        push_both "" "${VERSION}"
-    fi
+    buildx_image "" Dockerfile . --build-arg VERSION="${VERSION}"
     echo -e "${GREEN}✓ All-in-One complete${NC}"
     echo ""
 fi

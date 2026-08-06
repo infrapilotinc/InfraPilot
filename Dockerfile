@@ -26,7 +26,10 @@ RUN cd backend && go mod download
 COPY backend/ ./backend/
 
 ARG VERSION=dev
-RUN cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+# TARGETARCH is auto-provided by buildx (amd64 / arm64) so the binary matches the
+# image platform — hardcoding amd64 here is what broke arm64 installs.
+ARG TARGETARCH
+RUN cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
     -ldflags="-X main.version=${VERSION} -w -s" \
     -o /backend ./cmd/server
 
@@ -44,7 +47,8 @@ RUN cd agent && go mod download
 
 COPY agent/ ./agent/
 
-RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+ARG TARGETARCH
+RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
     -ldflags="-w -s" \
     -o /agent ./cmd/agent
 
@@ -145,8 +149,9 @@ RUN wget -q -O /tmp/install-syft.sh https://raw.githubusercontent.com/anchore/sy
     rm /tmp/install-syft.sh && \
     syft version
 
-# Install OPA (Open Policy Agent) for policy evaluation
-RUN wget -q -O /usr/local/bin/opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static && \
+# Install OPA (Open Policy Agent) for policy evaluation — arch-matched via TARGETARCH
+ARG TARGETARCH
+RUN wget -q -O /usr/local/bin/opa "https://openpolicyagent.org/downloads/latest/opa_linux_${TARGETARCH}_static" && \
     chmod +x /usr/local/bin/opa && \
     opa version
 

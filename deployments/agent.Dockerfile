@@ -18,8 +18,10 @@ RUN go mod download
 # Copy source
 COPY . .
 
-# Build binary with garble obfuscation
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 garble -literals -seed=random build \
+# Build binary with garble obfuscation. TARGETARCH is auto-provided by buildx so
+# the binary matches the image platform (garble respects GOARCH like `go build`).
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} garble -literals -seed=random build \
     -ldflags="-w -s" \
     -o /agent ./cmd/agent
 
