@@ -59,7 +59,10 @@ FROM node:22-alpine AS frontend-builder
 
 WORKDIR /build
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Pin pnpm — the lockfile is v9.0, and pnpm 10's default build-script blocking
+# fails the CI install (ERR_PNPM_IGNORED_BUILDS on esbuild/sharp). 9.x runs them
+# normally. Pinned (not @latest) so the build is reproducible.
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 COPY frontend/package.json frontend/pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile

@@ -7,7 +7,9 @@ FROM node:22-alpine AS builder
 WORKDIR /build
 
 # Enable pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Pin pnpm — lockfile is v9.0; pnpm 10's build-script blocking fails the CI
+# install (esbuild/sharp). 9.x runs them normally. Pinned for reproducibility.
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 # Copy package files
 COPY package.json pnpm-lock.yaml* ./
