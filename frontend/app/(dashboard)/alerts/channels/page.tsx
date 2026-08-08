@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Spinner } from "@/components/ui/Spinner";
 import { Button, Input } from "@/components/ui/page-layout";
+import { FeatureGate } from "@/components/ui/FeatureGate";
 
 const defaultForm = {
   name: "",
@@ -82,7 +83,7 @@ function getChannelIcon(type: string) {
   }
 }
 
-export default function AlertChannelsPage() {
+function AlertChannelsPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -589,5 +590,17 @@ export default function AlertChannelsPage() {
         </div>
       )}
     </>
+  );
+}
+
+// Alert channels (email / Slack / Discord delivery) are "connected" features
+// (doc 35) — they require a free account key. Keyless CE lacks the flag, so
+// FeatureGate shows the "get a free CE key" prompt; a free key unlocks them.
+// The alert *rules* + *history* pages stay free (advanced_alerts is in the base).
+export default function AlertChannelsPage() {
+  return (
+    <FeatureGate feature="email_alerts" featureLabel="Alert Channels">
+      <AlertChannelsPageContent />
+    </FeatureGate>
   );
 }
