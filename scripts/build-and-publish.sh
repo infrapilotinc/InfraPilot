@@ -29,7 +29,9 @@ set -e
 #   --platform    Target platform(s) (e.g., linux/amd64,linux/arm64)
 #   --amd64       Shortcut: build amd64 only (fast — no arm64 emulation)
 #   --arm64       Shortcut: build arm64 only
-#   (default is multi-arch; override the default via the PLATFORMS env var too)
+#   --docker-only Push to Docker Hub only (skip GHCR — what CE installs pull)
+#   --ghcr-only   Push to GHCR only (skip Docker Hub)
+#   (default is multi-arch + both registries; PLATFORMS/PUSH_GHCR/PUSH_DOCKERHUB env also work)
 #
 # Examples:
 #   ./scripts/build-and-publish.sh v1.2.3                       # multi-arch release
@@ -65,6 +67,9 @@ GHCR_PREFIX="${GHCR_REGISTRY:-ghcr.io/infrapilothq/infrapilot-ce}"
 # to GHCR via GITHUB_TOKEN and has no Docker Hub credentials). Defaults to true
 # to preserve the original dual-registry behavior for local runs.
 PUSH_DOCKERHUB="${PUSH_DOCKERHUB:-true}"
+# Set PUSH_GHCR=false (or pass --docker-only) to skip GHCR entirely — handy when the
+# GHCR token is unavailable/denied, since the CE install pulls from Docker Hub anyway.
+PUSH_GHCR="${PUSH_GHCR:-true}"
 
 # Colors
 RED='\033[0;31m'
@@ -120,6 +125,16 @@ while [[ $# -gt 0 ]]; do
             BUILD_FRONTEND=false
             BUILD_AGENT=false
             BUILD_ALL_IN_ONE=true
+            shift
+            ;;
+        --docker-only)
+            PUSH_GHCR=false
+            PUSH_DOCKERHUB=true
+            shift
+            ;;
+        --ghcr-only)
+            PUSH_DOCKERHUB=false
+            PUSH_GHCR=true
             shift
             ;;
         --no-push)
@@ -182,12 +197,12 @@ buildx_image() {
 
     local tags=()
     [ "$PUSH_DOCKERHUB" = true ] && tags+=(-t "${dh}:${VERSION}")
-    tags+=(-t "${ghcr}:${VERSION}")
+    [ "$PUSH_GHCR" = true ] && tags+=(-t "${ghcr}:${VERSION}")
     # Only promote to :latest for a full MULTI-arch release — a single-arch
     # (staging) build must not clobber the multi-arch :latest that ARM users pull.
     if [ "$VERSION" != "latest" ] && [[ "$PLATFORMS" == *,* ]]; then
         [ "$PUSH_DOCKERHUB" = true ] && tags+=(-t "${dh}:latest")
-        tags+=(-t "${ghcr}:latest")
+        [ "$PUSH_GHCR" = true ] && tags+=(-t "${ghcr}:latest")
     fi
 
     if [ "$PUSH" = true ]; then
@@ -218,13 +233,16 @@ registry_login() {
         fi
     fi
 
-    local ghcr_user="${GHCR_USERNAME:-${GITHUB_ACTOR:-}}"
-    local ghcr_token="${GHCR_TOKEN:-${GITHUB_TOKEN:-}}"
-    if [ -n "$ghcr_user" ] && [ -n "$ghcr_token" ]; then
-        echo -e "${BLUE}→ Logging in to ghcr.io as ${ghcr_user}...${NC}"
-        echo "${ghcr_token}" | docker login ghcr.io -u "${ghcr_user}" --password-stdin
-    else
-        echo -e "${YELLOW}  ! GHCR_USERNAME/GHCR_TOKEN not set — relying on existing 'docker login' for ghcr.io.${NC}"
+    if [ "$PUSH_GHCR" = true ]; then
+        local ghcr_user="${GHCR_USERNAME:-${GITHUB_ACTOR:-}}"
+        local ghcr_token="${GHCR_TOKEN:-${GITHUB_TOKEN:-}}"
+        if [ -n "$ghcr_user" ] && [ -n "$ghcr_token" ]; then
+            echo -e "${BLUE}→ Logging in to ghcr.io as ${ghcr_user}...${NC}"
+            echo "${ghcr_token}" | docker login ghcr.io -u "${ghcr_user}" --password-stdin \
+                || echo -e "${YELLOW}  ! GHCR login failed — pass --docker-only to skip GHCR (Docker Hub is what installs pull).${NC}"
+        else
+            echo -e "${YELLOW}  ! GHCR_USERNAME/GHCR_TOKEN not set — relying on existing 'docker login' for ghcr.io.${NC}"
+        fi
     fi
 }
 
