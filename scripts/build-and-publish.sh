@@ -31,6 +31,7 @@ set -e
 #   --arm64       Shortcut: build arm64 only
 #   --docker-only Push to Docker Hub only (skip GHCR — what CE installs pull)
 #   --ghcr-only   Push to GHCR only (skip Docker Hub)
+#   --garble      Obfuscate the agent binary (release builds; slow under emulation, off by default)
 #   (default is multi-arch + both registries; PLATFORMS/PUSH_GHCR/PUSH_DOCKERHUB env also work)
 #
 # Examples:
@@ -90,6 +91,9 @@ PUSH=true
 # Requires buildx + QEMU (set up automatically).
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 NO_CACHE=""
+# Agent obfuscation: 1=garble on, 0=off (default). Off is much faster, especially under
+# arm64 emulation; turn on for release builds with --garble. Only affects the agent image.
+GARBLE="${GARBLE:-0}"
 
 # Process options
 shift || true
@@ -97,6 +101,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --no-cache)
             NO_CACHE="--no-cache"
+            shift
+            ;;
+        --garble)
+            GARBLE=1
             shift
             ;;
         --backend)
@@ -274,7 +282,8 @@ fi
 # =============================================================
 if [ "$BUILD_AGENT" = true ]; then
     echo -e "${YELLOW}Building Agent Controller...${NC}"
-    buildx_image "-agent" deployments/agent.Dockerfile ./agent
+    [ "$GARBLE" = "1" ] && echo -e "  ${BLUE}obfuscation:${NC} garble ON" || echo -e "  ${BLUE}obfuscation:${NC} off (plain go build — pass --garble to enable)"
+    buildx_image "-agent" deployments/agent.Dockerfile ./agent --build-arg GARBLE="${GARBLE}"
     echo -e "${GREEN}✓ Agent complete${NC}"
     echo ""
 fi

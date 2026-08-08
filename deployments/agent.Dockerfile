@@ -6,10 +6,16 @@ FROM golang:1.23-alpine AS builder
 
 WORKDIR /build
 
+# Obfuscation toggle. GARBLE=1 → build with garble (-literals); GARBLE=0 → plain `go build`.
+# Default 0: garble recompiles the whole dependency tree, which is brutally slow under
+# cross-arch (arm64) emulation. Turn it on for release builds: `--garble` (--build-arg GARBLE=1).
+ARG GARBLE=0
+
 RUN apk add --no-cache git ca-certificates
 
-# Install garble for binary obfuscation
-RUN go install mvdan.cc/garble@latest
+# Install garble only when obfuscation is enabled. Pin the version — garble@latest can require a
+# newer Go than this builder (v0.15.0+ need Go >= 1.25); v0.14.2 works with this Go 1.23 builder.
+RUN if [ "$GARBLE" = "1" ]; then go install mvdan.cc/garble@v0.14.2; fi
 
 # Copy go modules
 COPY go.mod go.sum* ./
@@ -18,12 +24,18 @@ RUN go mod download
 # Copy source
 COPY . .
 
-# Build binary with garble obfuscation. TARGETARCH is auto-provided by buildx so
-# the binary matches the image platform (garble respects GOARCH like `go build`).
+# Build the agent. TARGETARCH is auto-provided by buildx so the binary matches the image
+# platform (garble respects GOARCH like `go build`). GARBLE=1 obfuscates; 0 (default) is faster.
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} garble -literals -seed=random build \
-    -ldflags="-w -s" \
-    -o /agent ./cmd/agent
+RUN if [ "$GARBLE" = "1" ]; then \
+        echo "==> building agent WITH garble obfuscation" && \
+        CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} garble -literals -seed=random build \
+            -ldflags="-w -s" -o /agent ./cmd/agent; \
+    else \
+        echo "==> building agent WITHOUT garble (plain go build)" && \
+        CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+            -ldflags="-w -s" -o /agent ./cmd/agent; \
+    fi
 
 # -------------------------------------------------------------
 # Runtime Stage
