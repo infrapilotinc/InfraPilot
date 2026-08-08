@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { FeatureGate } from "@/components/ui/FeatureGate";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Breadcrumb } from "@/components/ui/Breadcrumb";
 import { StatCard, MetricsGrid } from "@/components/ui/StatCard";
@@ -85,7 +86,7 @@ const providerColors: Record<string, string> = {
   generic: "text-blue-600 dark:text-blue-400",
 };
 
-export default function WebhooksPage() {
+function WebhooksPageContent() {
   const [selectedWebhook, setSelectedWebhook] = useState<WebhookConfig | null>(null);
   const [copiedSecret, setCopiedSecret] = useState(false);
   const [copiedURL, setCopiedURL] = useState(false);
@@ -798,5 +799,16 @@ export default function WebhooksPage() {
         </SlideOver.Body>
       </SlideOver>
     </div>
+  );
+}
+
+// Webhooks is a "connected" feature (doc 35): it requires a free account key.
+// Anonymous/keyless CE lacks the "webhooks" flag, so FeatureGate shows the
+// "get a free CE key" prompt; a free key unlocks it.
+export default function WebhooksPage() {
+  return (
+    <FeatureGate feature="webhooks" featureLabel="Webhooks">
+      <WebhooksPageContent />
+    </FeatureGate>
   );
 }
