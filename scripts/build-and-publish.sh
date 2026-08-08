@@ -26,10 +26,14 @@ set -e
 #   --all-in-one  Build and push legacy all-in-one image only
 #   --no-push     Build images but don't push to registry
 #   --no-cache    Build without Docker layer cache
-#   --platform    Target platform (e.g., linux/amd64,linux/arm64)
+#   --platform    Target platform(s) (e.g., linux/amd64,linux/arm64)
+#   --amd64       Shortcut: build amd64 only (fast — no arm64 emulation)
+#   --arm64       Shortcut: build arm64 only
+#   (default is multi-arch; override the default via the PLATFORMS env var too)
 #
 # Examples:
-#   ./scripts/build-and-publish.sh v1.2.3
+#   ./scripts/build-and-publish.sh v1.2.3                       # multi-arch release
+#   ./scripts/build-and-publish.sh v1.2.3-staging --amd64       # fast single-arch staging
 #   ./scripts/build-and-publish.sh --backend --no-push
 #   ./scripts/build-and-publish.sh latest --platform linux/amd64,linux/arm64
 #
@@ -77,8 +81,9 @@ BUILD_AGENT=true
 BUILD_ALL_IN_ONE=true
 PUSH=true
 # Multi-arch by default so ARM hosts (Graviton, Ampere, Apple-Silicon Linux, Pi)
-# can pull. Override with --platform. Requires buildx + QEMU (set up automatically).
-PLATFORMS="linux/amd64,linux/arm64"
+# can pull. Override with --platform / --amd64 / --arm64, or the PLATFORMS env var.
+# Requires buildx + QEMU (set up automatically).
+PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 NO_CACHE=""
 
 # Process options
@@ -119,6 +124,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-push)
             PUSH=false
+            shift
+            ;;
+        --amd64)
+            PLATFORMS="linux/amd64"
+            shift
+            ;;
+        --arm64)
+            PLATFORMS="linux/arm64"
             shift
             ;;
         --platform)
@@ -170,7 +183,9 @@ buildx_image() {
     local tags=()
     [ "$PUSH_DOCKERHUB" = true ] && tags+=(-t "${dh}:${VERSION}")
     tags+=(-t "${ghcr}:${VERSION}")
-    if [ "$VERSION" != "latest" ]; then
+    # Only promote to :latest for a full MULTI-arch release — a single-arch
+    # (staging) build must not clobber the multi-arch :latest that ARM users pull.
+    if [ "$VERSION" != "latest" ] && [[ "$PLATFORMS" == *,* ]]; then
         [ "$PUSH_DOCKERHUB" = true ] && tags+=(-t "${dh}:latest")
         tags+=(-t "${ghcr}:latest")
     fi
