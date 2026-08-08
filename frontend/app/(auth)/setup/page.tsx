@@ -10,7 +10,8 @@ export default function SetupPage() {
   const { setTokens } = useAuthStore();
 
   const [ready, setReady] = useState(false);
-  const [step, setStep] = useState<1 | 2>(1); // 1 = license key, 2 = admin account
+  // Keyless by default (doc 36 §7): 2 = admin account is the primary step; 1 = optional license activation.
+  const [step, setStep] = useState<1 | 2>(2);
 
   // Step 1: license
   const [licenseKey, setLicenseKey] = useState("");
@@ -29,16 +30,13 @@ export default function SetupPage() {
     api.getSetupStatus().then((status) => {
       if (!status.setup_required) {
         router.replace("/login");
-      } else if (status.license_configured) {
-        // Valid license already active — skip straight to admin account step
-        setStep(2);
-        setReady(true);
-      } else {
-        if (status.license_error) {
-          setLicenseError(status.license_error);
-        }
-        setReady(true);
+        return;
       }
+      // Keyless by default: always land on admin-account creation. A license is
+      // optional — activate it here (link) or later in Settings → License.
+      if (status.license_error) setLicenseError(status.license_error);
+      setStep(2);
+      setReady(true);
     }).catch(() => {
       setReady(true);
     });
@@ -114,8 +112,8 @@ export default function SetupPage() {
             </span>
             <p className="text-gray-600 dark:text-gray-400 mt-2">
               {step === 1
-                ? "Step 1 of 2 — Activate your license"
-                : "Step 2 of 2 — Create your admin account"}
+                ? "Activate a license (optional)"
+                : "Create your admin account"}
             </p>
           </div>
 
@@ -155,17 +153,13 @@ export default function SetupPage() {
                 {licenseLoading ? "Validating..." : "Activate License →"}
               </button>
 
-              <p className="text-center text-xs text-gray-500 dark:text-gray-400">
-                Don&apos;t have a key?{" "}
-                <a
-                  href="https://infrapilot.org/signup"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary-600 dark:text-primary-400 hover:underline"
-                >
-                  Get a free Community Edition key
-                </a>
-              </p>
+              <button
+                type="button"
+                onClick={() => { setLicenseError(""); setStep(2); }}
+                className="w-full text-center text-sm text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
+              >
+                ← Skip — continue with Community Edition
+              </button>
             </form>
           )}
 
@@ -242,6 +236,17 @@ export default function SetupPage() {
               >
                 {adminLoading ? "Creating Account..." : "Create Admin Account →"}
               </button>
+
+              <p className="text-center text-xs text-gray-500 dark:text-gray-400">
+                Have an Enterprise license?{" "}
+                <button
+                  type="button"
+                  onClick={() => setStep(1)}
+                  className="text-primary-600 dark:text-primary-400 hover:underline"
+                >
+                  Activate it
+                </button>
+              </p>
             </form>
           )}
         </div>
