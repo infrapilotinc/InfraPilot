@@ -3,7 +3,8 @@
 import { ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { RefreshCw, Plus } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Breadcrumb } from "@/components/ui/Breadcrumb";
 import { cn } from "@/lib/utils";
@@ -25,8 +26,18 @@ export default function AlertsLayout({ children }: { children: ReactNode }) {
   };
   const activeTab = getActiveTab();
 
+  // Alert channels are a "connected" feature (doc 35) — hide the channel-specific
+  // "Add Channel" action when the license lacks it, so it doesn't leak past the
+  // FeatureGate on the channels page. (Tabs stay: Rules/History are free.)
+  const { data: license } = useQuery({
+    queryKey: ["licenseTierInfo"],
+    queryFn: () => api.getLicenseTierInfo(),
+    staleTime: 60 * 1000,
+  });
+  const hasChannels = license?.features?.includes("email_alerts") ?? false;
+
   const getActionButton = () => {
-    if (activeTab === "channels") {
+    if (activeTab === "channels" && hasChannels) {
       return (
         <button
           onClick={() => router.push("/alerts/channels?action=add")}
