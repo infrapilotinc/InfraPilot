@@ -20,7 +20,12 @@ const (
 	FeatureCustomIntegrations  = "custom_integrations"
 )
 
-// CommunityFeatures returns the features available in Community Edition (no key required).
+// CommunityFeatures returns the free, full single-node platform available in
+// Community Edition (no key required). CE is gated on SERVER COUNT (1), not
+// features — paid tiers add advanced security + team/compliance + more servers.
+//
+// This is the CE-side mirror of infrapilot.org packages/license COMMUNITY_BASE —
+// keep the two in sync. To change what's free, edit this one list.
 func CommunityFeatures() []string {
 	return []string{
 		FeatureCoreMonitoring,
@@ -29,6 +34,7 @@ func CommunityFeatures() []string {
 		FeatureStackManagement,
 		FeatureCDDeployments,
 		FeatureTrafficAnalytics,
+		FeatureSecretsManagement,
 	}
 }
 
@@ -43,6 +49,7 @@ func AllFeatures() []string {
 		FeatureCodeQuality,
 		FeatureStackManagement,
 		FeatureCDDeployments,
+		FeatureTrafficAnalytics,
 		FeatureDataGovernance,
 		FeatureRuntimeSecurity,
 		FeatureUnlimitedAgents,
