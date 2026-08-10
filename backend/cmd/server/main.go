@@ -110,7 +110,11 @@ func main() {
 			}
 		}
 		if licenseClient == nil {
-			licenseClient = license.NewSetupModeClient(logger)
+			// No usable license → keyless Community Edition (valid, 1 agent, community
+			// features). NOT setup mode: setup mode grants ALL features, which after
+			// initial setup is both wrong (keyless CE is community) and a privilege
+			// hole. This is what Settings → License reflects.
+			licenseClient = license.NewCommunityModeClient(logger)
 		}
 	} else {
 		// Try to load license key from system_settings (saved via setup wizard)
@@ -146,7 +150,11 @@ func main() {
 		}
 
 		if licenseClient == nil {
-			licenseClient = license.NewSetupModeClient(logger)
+			// No usable license → keyless Community Edition (valid, 1 agent, community
+			// features). NOT setup mode: setup mode grants ALL features, which after
+			// initial setup is both wrong (keyless CE is community) and a privilege
+			// hole. This is what Settings → License reflects.
+			licenseClient = license.NewCommunityModeClient(logger)
 		}
 	}
 
