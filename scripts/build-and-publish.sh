@@ -68,9 +68,11 @@ GHCR_PREFIX="${GHCR_REGISTRY:-ghcr.io/infrapilothq/infrapilot-ce}"
 # to GHCR via GITHUB_TOKEN and has no Docker Hub credentials). Defaults to true
 # to preserve the original dual-registry behavior for local runs.
 PUSH_DOCKERHUB="${PUSH_DOCKERHUB:-true}"
-# Set PUSH_GHCR=false (or pass --docker-only) to skip GHCR entirely — handy when the
-# GHCR token is unavailable/denied, since the CE install pulls from Docker Hub anyway.
-PUSH_GHCR="${PUSH_GHCR:-true}"
+# CE is a public Docker-Hub product; GHCR is the EE-only private registry. The org
+# PAT can push the existing infrapilot-ee package but is NOT allowed to create a new
+# infrapilot-ce package (create_package denied), and CE installs pull from Docker Hub
+# anyway — so default GHCR OFF. Re-enable per-run with --ghcr-only or PUSH_GHCR=true.
+PUSH_GHCR="${PUSH_GHCR:-false}"
 
 # Colors
 RED='\033[0;31m'
