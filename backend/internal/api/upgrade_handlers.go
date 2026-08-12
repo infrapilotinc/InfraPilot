@@ -319,26 +319,48 @@ func (h *Handler) spawnSwitchHelper(dir, key, eeImage, version, tier string, eeC
 		statusMounts = []string{"-v", dataVol + ":/upgrade-status"}
 	}
 
+	// The helper swaps compose/.env, brings up Enterprise, then HEALTH-GATES the switch:
+	// it waits up to ~150s for the service to report healthy. A container that starts but
+	// then crash-loops (e.g. a failed migration) stays "unhealthy" — so we revert to the
+	// backed-up Community compose/.env instead of leaving a broken box. Backups are made
+	// world-readable so an operator can also revert by hand without root.
+	revert := `cp ` + upgradeBackupDir + `/docker-compose.yml docker-compose.yml 2>/dev/null || true
+  cp ` + upgradeBackupDir + `/.env .env 2>/dev/null || true
+  docker compose up -d || true`
+
 	script := fmt.Sprintf(`set -e
 sleep 3
 cd %[1]q
 mkdir -p %[2]s
 cp docker-compose.yml %[2]s/ 2>/dev/null || true
 cp .env %[2]s/ 2>/dev/null || true
+chmod -R a+r %[2]s 2>/dev/null || true
 echo %[3]q | base64 -d > docker-compose.yml
 touch .env
 grep -vE '^(EE_IMAGE|LICENSE_KEY|INFRAPILOT_VERSION)=' .env > .env.next 2>/dev/null || true
 mv .env.next .env 2>/dev/null || true
 printf 'EE_IMAGE=%%s\nLICENSE_KEY=%%s\nINFRAPILOT_VERSION=%%s\n' %[4]q %[5]q %[6]q >> .env
 if docker compose up -d --pull never; then
-  printf '{"state":"completed","tier":%[7]q,"at":%[8]q}' > %[9]s
+  cid=$(docker compose ps -q infrapilot 2>/dev/null)
+  ok=0
+  n=0
+  while [ $n -lt 30 ]; do
+    sleep 5
+    st=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || echo gone)
+    if [ "$st" = "healthy" ] || [ "$st" = "running" ]; then ok=1; break; fi
+    n=$((n+1))
+  done
+  if [ "$ok" = "1" ]; then
+    printf '{"state":"completed","tier":%[7]q,"at":%[8]q}' > %[9]s
+  else
+    %[10]s
+    printf '{"state":"failed","tier":%[7]q,"error":"Enterprise did not become healthy in time (likely a database/migration incompatibility) — reverted to Community Edition.","at":%[8]q}' > %[9]s
+  fi
 else
-  cp %[2]s/docker-compose.yml docker-compose.yml 2>/dev/null || true
-  cp %[2]s/.env .env 2>/dev/null || true
-  docker compose up -d || true
+  %[10]s
   printf '{"state":"failed","tier":%[7]q,"error":"Enterprise container failed to start; reverted to Community Edition.","at":%[8]q}' > %[9]s
 fi`,
-		dir, upgradeBackupDir, composeB64, eeImage, key, version, tier, now, statusOut)
+		dir, upgradeBackupDir, composeB64, eeImage, key, version, tier, now, statusOut, revert)
 
 	helperArgs := []string{
 		"run", "--rm", "-d",
