@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { SSLWizard } from "@/components/ssl-wizard";
+import { UpdateProgressModal } from "@/components/settings/UpdateProgressModal";
 
 function InfraPilotDomainSection() {
   const queryClient = useQueryClient();
@@ -311,7 +312,7 @@ function InfraPilotDomainSection() {
 }
 
 function SoftwareUpdateSection() {
-  const [applyResult, setApplyResult] = useState<{ status: string; message: string } | null>(null);
+  const [showUpdate, setShowUpdate] = useState(false);
   const [displayVersion, setDisplayVersion] = useState<string>("");
 
   const { data: versionInfo } = useQuery({
@@ -332,17 +333,6 @@ function SoftwareUpdateSection() {
   if (resolvedVersion && resolvedVersion !== displayVersion) {
     setDisplayVersion(resolvedVersion);
   }
-
-  const applyMutation = useMutation({
-    mutationFn: () => api.applyUpdate(),
-    onSuccess: (data) => setApplyResult(data),
-    onError: (err: Error) => {
-      // A network error here likely means the container restarted mid-response — treat as success.
-      if (err.message === "Failed to fetch" || err.name === "TypeError") {
-        setApplyResult({ status: "restarting", message: "Update applied. InfraPilot is restarting — refresh in a few seconds." });
-      }
-    },
-  });
 
   const pushedAt = updateInfo?.latest_pushed_at
     ? new Date(updateInfo.latest_pushed_at).toLocaleDateString(undefined, {
@@ -402,16 +392,11 @@ function SoftwareUpdateSection() {
                     )}
                   </div>
                   <button
-                    onClick={() => applyMutation.mutate()}
-                    disabled={applyMutation.isPending || applyResult?.status === "restarting"}
-                    className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-400 text-white text-sm font-medium rounded-lg transition-colors"
+                    onClick={() => setShowUpdate(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-lg transition-colors"
                   >
-                    {applyMutation.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <ArrowUpCircle className="h-4 w-4" />
-                    )}
-                    {applyMutation.isPending ? "Updating…" : "Update Now"}
+                    <ArrowUpCircle className="h-4 w-4" />
+                    Update Now
                   </button>
                 </div>
               ) : (
@@ -423,33 +408,25 @@ function SoftwareUpdateSection() {
             </>
           )}
 
-          {/* Apply result */}
-          {applyResult && (
-            <div className={cn(
-              "p-4 rounded-lg border text-sm",
-              applyResult.status === "restarting"
-                ? "bg-primary-500/5 border-primary-500/20 text-primary-400"
-                : applyResult.status === "error"
-                ? "bg-red-500/5 border-red-500/20 text-red-400"
-                : "bg-yellow-500/5 border-yellow-500/20 text-yellow-400"
-            )}>
-              {applyResult.message}
-              {applyResult.status === "restarting" && (
-                <span className="ml-2 inline-flex items-center gap-1">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Restarting…
-                </span>
-              )}
-            </div>
-          )}
-
-          {applyMutation.isError && (
-            <div className="p-4 bg-red-500/5 border border-red-500/20 rounded-lg text-sm text-red-400">
-              {applyMutation.error?.message ?? "Update failed"}
-            </div>
-          )}
         </div>
       </Card.Body>
+
+      {showUpdate && (
+        <UpdateProgressModal
+          title="Updating InfraPilot"
+          icon="update"
+          streamPath="/settings/update/apply/stream"
+          steps={[
+            { key: "download", label: "Download latest release" },
+            { key: "restart", label: "Apply update & restart" },
+          ]}
+          verifyMode="version-changed"
+          baselineVersion={displayVersion}
+          successMessage="InfraPilot is up to date and running the latest release."
+          onClose={() => setShowUpdate(false)}
+          onDone={() => refetch()}
+        />
+      )}
     </Card>
   );
 }

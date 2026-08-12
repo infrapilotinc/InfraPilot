@@ -55,7 +55,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	{
 		// Version (public)
 		v1.GET("/version", func(c *gin.Context) {
-			c.JSON(200, gin.H{"version": h.version, "edition": "community"})
+			c.JSON(200, gin.H{"version": h.version, "edition": Edition})
 		})
 
 		// Setup routes (public - only work when no users exist)
@@ -330,6 +330,10 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				settings.GET("/license", h.getLicenseSettings)
 				settings.PUT("/license", h.updateLicenseKey)
 
+				// Live CE→EE upgrade (SSE progress + auto-revert). CE only.
+				settings.GET("/license/upgrade", h.upgradeToEnterprise)
+				settings.GET("/license/upgrade/status", h.getUpgradeStatus)
+
 				// Default pages
 				settings.GET("/default-pages", h.listDefaultPages)
 				settings.GET("/default-pages/:type", h.getDefaultPage)
@@ -338,7 +342,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 
 				// Self-update (CE only)
 				settings.GET("/update/check", h.checkForUpdate)
-				settings.POST("/update/apply", h.applyUpdate)
+				settings.POST("/update/apply", h.applyUpdate)      // legacy fire-and-forget
+				settings.GET("/update/apply/stream", h.applyUpdateStream) // live SSE progress
 			}
 
 			// SSL/TLS Management
@@ -404,7 +409,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 func (h *Handler) healthCheck(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"status":  "ok",
-		"edition": "community",
+		"edition": Edition,
 		"version": h.version,
 	})
 }

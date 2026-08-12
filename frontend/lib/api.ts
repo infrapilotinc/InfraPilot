@@ -615,6 +615,16 @@ export interface LicenseSettingsResponse {
   upgrade_url: string;
   key_display: string; // masked key, e.g. "IP-CE-****-****-WG7U"
   key_source: "env" | "database" | "setup_mode" | "offline";
+  edition?: "community" | "enterprise"; // the running image
+}
+
+export interface UpgradeStatus {
+  state: "none" | "switching" | "completed" | "failed" | "unknown";
+  tier?: string;
+  message?: string;
+  error?: string;
+  at?: string;
+  edition?: "community" | "enterprise";
 }
 
 // Matches what GET /api/v1/license actually returns (available to all authenticated users)
@@ -4298,6 +4308,9 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ key }),
     }),
+  // Outcome recorded by the CE→EE switch helper; polled across the restart.
+  getUpgradeStatus: () =>
+    fetchAPI<UpgradeStatus>("/settings/license/upgrade/status"),
 
   // SSO Providers (admin)
   getSSOProviders: () => fetchAPI<SSOProvider[]>("/sso/providers"),

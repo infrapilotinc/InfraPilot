@@ -10,11 +10,15 @@ import {
   KeyRound,
   Loader2,
   Check,
+  Rocket,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { UpdateProgressModal } from "@/components/settings/UpdateProgressModal";
+
+const PAID_TIERS = ["professional", "business", "enterprise"];
 
 const TIER_CONFIG: Record<string, { label: string; color: string; badgeClass: string; iconClass: string }> = {
   community: {
@@ -67,6 +71,7 @@ function LicenseSection() {
   const [showUpdateForm, setShowUpdateForm] = useState(false);
   const [updateError, setUpdateError] = useState("");
   const [updateSuccess, setUpdateSuccess] = useState(false);
+  const [showUpgrade, setShowUpgrade] = useState(false);
 
   const { data: license, isLoading } = useQuery({
     queryKey: ["licenseSettings"],
@@ -93,6 +98,11 @@ function LicenseSection() {
   const tierCfg = TIER_CONFIG[tier] ?? TIER_CONFIG.community;
   const isEnvLocked = license?.key_source === "env";
   const isOffline = license?.key_source === "offline";
+  // Paid key active, but this server is still running the Community image → needs the
+  // in-place CE→EE image switch to actually deliver the paid features.
+  const needsImageSwitch =
+    license?.edition === "community" && PAID_TIERS.includes(tier) && !isEnvLocked && !isOffline;
+  const tierLabel = tier.charAt(0).toUpperCase() + tier.slice(1);
 
   return (
     <Card>
@@ -121,6 +131,55 @@ function LicenseSection() {
                 <Check className="h-4 w-4 flex-shrink-0" />
                 License key updated successfully. Your new license is active immediately.
               </div>
+            )}
+
+            {needsImageSwitch && (
+              <div className="p-4 rounded-lg border border-purple-500/40 bg-purple-500/5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex gap-3">
+                    <Rocket className="h-5 w-5 text-purple-400 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <h4 className="font-medium text-gray-900 dark:text-white">
+                        Finish your upgrade to {tierLabel}
+                      </h4>
+                      <p className="text-sm text-gray-500 mt-0.5">
+                        Your {tierLabel} license is active, but this server is still running the
+                        Community image. Switch to the Enterprise image to unlock {tierLabel}{" "}
+                        features — your data and settings are preserved, and it auto-reverts if
+                        anything goes wrong.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowUpgrade(true)}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm flex-shrink-0 flex items-center gap-2"
+                  >
+                    <Rocket className="h-4 w-4" />
+                    Switch to Enterprise
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {showUpgrade && (
+              <UpdateProgressModal
+                title={`Upgrading to ${tierLabel}`}
+                icon="rocket"
+                streamPath="/settings/license/upgrade"
+                steps={[
+                  { key: "validate", label: "Validate license" },
+                  { key: "authenticate", label: "Authenticate with registry" },
+                  { key: "download", label: "Download Enterprise image" },
+                  { key: "switch", label: "Switch over & restart" },
+                ]}
+                verifyMode="edition-enterprise"
+                successMessage="Enterprise Edition is active."
+                onClose={() => setShowUpgrade(false)}
+                onDone={() => {
+                  queryClient.invalidateQueries({ queryKey: ["licenseSettings"] });
+                  queryClient.invalidateQueries({ queryKey: ["licenseTierInfo"] });
+                }}
+              />
             )}
 
             <div className={cn("p-4 rounded-lg border", tier === "enterprise" ? "bg-purple-500/5 border-purple-500/30" : tier === "professional" ? "bg-blue-500/5 border-blue-500/30" : "bg-green-500/5 border-green-500/30")}>

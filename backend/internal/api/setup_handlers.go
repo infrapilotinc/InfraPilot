@@ -270,6 +270,7 @@ type LicenseSettingsResponse struct {
 	UpgradeURL string   `json:"upgrade_url"`
 	KeyDisplay string   `json:"key_display"` // masked key, empty if none
 	KeySource  string   `json:"key_source"`  // "env", "database", "setup_mode"
+	Edition    string   `json:"edition"`     // "community" or "enterprise" — the running image
 }
 
 // getLicenseSettings returns the current license info for the settings page.
@@ -284,6 +285,7 @@ func (h *Handler) getLicenseSettings(c *gin.Context) {
 			Features:   []string{},
 			UpgradeURL: "https://infrapilot.org/billing",
 			KeySource:  "setup_mode",
+			Edition:    Edition,
 		})
 		return
 	}
@@ -320,6 +322,7 @@ func (h *Handler) getLicenseSettings(c *gin.Context) {
 		UpgradeURL: "https://infrapilot.org/billing",
 		KeyDisplay: keyDisplay,
 		KeySource:  keySource,
+		Edition:    Edition,
 	})
 }
 
@@ -403,5 +406,6 @@ func (h *Handler) updateLicenseKey(c *gin.Context) {
 		UpgradeURL: "https://infrapilot.org/billing",
 		KeyDisplay: maskLicenseKey(req.Key),
 		KeySource:  "database",
+		Edition:    Edition,
 	})
 }

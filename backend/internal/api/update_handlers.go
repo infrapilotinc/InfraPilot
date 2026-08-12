@@ -91,6 +91,62 @@ func (h *Handler) checkForUpdate(c *gin.Context) {
 	})
 }
 
+// applyUpdateStream pulls the latest CE image and restarts, streaming live progress
+// over SSE — the same UX as the CE→EE upgrade. The download runs while the current
+// container is alive (a failed pull changes nothing); only then does a detached helper
+// recreate the container. The frontend confirms success by polling /version until the
+// running version changes, which also avoids the stale "up to date" false-positive.
+func (h *Handler) applyUpdateStream(c *gin.Context) {
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+
+	// The server enforces a 15s WriteTimeout; the image pull takes longer.
+	rc := http.NewResponseController(c.Writer)
+	_ = rc.SetWriteDeadline(time.Time{})
+	c.Writer.WriteHeader(http.StatusOK)
+
+	fail := func(step, msg string) {
+		h.logger.Warn("Self-update failed", zap.String("step", step), zap.String("error", msg))
+		sseEvent(c, "error", gin.H{"step": step, "error": msg})
+	}
+
+	// Step 1 — download the latest image (current container keeps running).
+	sseEvent(c, "step", gin.H{"step": "download", "status": "running", "label": "Downloading latest release"})
+	if perr := h.streamDockerPull(c, ceImage+":latest"); perr != nil {
+		fail("download", "image download failed: "+perr.Error())
+		return
+	}
+	sseEvent(c, "step", gin.H{"step": "download", "status": "done"})
+
+	// Step 2 — recreate the container from the freshly pulled image.
+	sseEvent(c, "step", gin.H{"step": "restart", "status": "running", "label": "Applying update & restarting"})
+	composeDir, derr := h.composeProjectDir()
+	if derr != nil || composeDir == "" {
+		fail("restart", "Image updated, but the compose project directory could not be located. Restart manually: docker compose up -d")
+		return
+	}
+
+	script := fmt.Sprintf(`set -e
+sleep 3
+cd %[1]q
+docker compose up -d --pull never`, composeDir)
+	helperArgs := []string{
+		"run", "--rm", "-d",
+		"-v", "/var/run/docker.sock:/var/run/docker.sock",
+		"-v", composeDir + ":" + composeDir,
+		"docker:cli", "sh", "-c", script,
+	}
+	if out, err := exec.Command("docker", helperArgs...).CombinedOutput(); err != nil {
+		fail("restart", "could not launch the restart helper: "+strings.TrimSpace(string(out)))
+		return
+	}
+
+	h.logger.Info("Self-update helper spawned; container will restart shortly")
+	sseEvent(c, "done", gin.H{"message": "Update downloaded. InfraPilot is restarting — reconnecting…"})
+}
+
 // applyUpdate pulls the latest CE image then triggers a zero-downtime compose restart
 // by spawning a short-lived helper container that runs docker compose up -d after a delay.
 func (h *Handler) applyUpdate(c *gin.Context) {
