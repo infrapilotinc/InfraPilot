@@ -326,11 +326,13 @@ func (h *Handler) spawnSwitchHelper(dir, key, eeImage, version, tier string, eeC
 	// world-readable so an operator can also revert by hand without root.
 	revert := `cp ` + upgradeBackupDir + `/docker-compose.yml docker-compose.yml 2>/dev/null || true
   cp ` + upgradeBackupDir + `/.env .env 2>/dev/null || true
+  chown "$own" docker-compose.yml .env 2>/dev/null || true
   docker compose up -d || true`
 
 	script := fmt.Sprintf(`set -e
 sleep 3
 cd %[1]q
+own=$(stat -c '%%u:%%g' . 2>/dev/null || echo 0:0)
 mkdir -p %[2]s
 cp docker-compose.yml %[2]s/ 2>/dev/null || true
 cp .env %[2]s/ 2>/dev/null || true
@@ -340,6 +342,7 @@ touch .env
 grep -vE '^(EE_IMAGE|LICENSE_KEY|INFRAPILOT_VERSION)=' .env > .env.next 2>/dev/null || true
 mv .env.next .env 2>/dev/null || true
 printf 'EE_IMAGE=%%s\nLICENSE_KEY=%%s\nINFRAPILOT_VERSION=%%s\n' %[4]q %[5]q %[6]q >> .env
+chown "$own" docker-compose.yml .env 2>/dev/null || true
 if docker compose up -d --pull never; then
   cid=$(docker compose ps -q infrapilot 2>/dev/null)
   ok=0
