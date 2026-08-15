@@ -17,6 +17,7 @@ import (
 	agentgrpc "github.com/infrapilot/backend/internal/grpc"
 	"github.com/infrapilot/backend/internal/license"
 	"github.com/infrapilot/backend/internal/registry"
+	"github.com/infrapilot/backend/internal/telemetry"
 	"github.com/infrapilot/backend/internal/webhook"
 )
 
@@ -30,9 +31,10 @@ type Handler struct {
 	cfg             *config.Config
 	version         string
 	registryService *registry.Service
+	telemetry       *telemetry.Client
 }
 
-func NewHandler(db *pgxpool.Pool, authService *auth.Service, logger *zap.Logger, encryptionSvc *crypto.EncryptionService, licenseClient *license.Client, cfg *config.Config, version string) *Handler {
+func NewHandler(db *pgxpool.Pool, authService *auth.Service, logger *zap.Logger, encryptionSvc *crypto.EncryptionService, licenseClient *license.Client, cfg *config.Config, version string, tel *telemetry.Client) *Handler {
 	return &Handler{
 		db:              db,
 		auth:            authService,
@@ -43,6 +45,7 @@ func NewHandler(db *pgxpool.Pool, authService *auth.Service, logger *zap.Logger,
 		cfg:             cfg,
 		version:         version,
 		registryService: registry.NewService(db, logger, encryptionSvc),
+		telemetry:       tel,
 	}
 }
 

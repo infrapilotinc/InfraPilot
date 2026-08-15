@@ -23,6 +23,7 @@ import (
 	"github.com/infrapilot/backend/internal/db"
 	agentgrpc "github.com/infrapilot/backend/internal/grpc"
 	"github.com/infrapilot/backend/internal/license"
+	"github.com/infrapilot/backend/internal/telemetry"
 )
 
 // version is injected at build time via -ldflags.
@@ -160,6 +161,12 @@ func main() {
 
 	logger.Info("InfraPilot started", zap.String("version", version), zap.String("tier", licenseClient.Tier()))
 
+	// Anonymous, opt-out product-funnel telemetry (v3/40). Keyless CE never validates, so
+	// this is the only channel that makes the free funnel visible. Best-effort, non-blocking.
+	tel := telemetry.New(cfg.DataDir, "community", version, licenseClient.Tier, logger)
+	tel.EmitOnce("installed", nil)
+	go tel.StartHeartbeat(ctx)
+
 	// Initialize encryption service (optional but recommended)
 	var encryptionSvc *crypto.EncryptionService
 	if cfg.EncryptionKey != "" {
@@ -187,7 +194,7 @@ func main() {
 	router.Use(api.CORSMiddleware(cfg.AllowedOrigins))
 
 	// Setup API routes
-	apiHandler := api.NewHandler(pool, authService, logger, encryptionSvc, licenseClient, cfg, version)
+	apiHandler := api.NewHandler(pool, authService, logger, encryptionSvc, licenseClient, cfg, version, tel)
 	apiHandler.RegisterRoutes(router)
 
 	httpServer := &http.Server{
