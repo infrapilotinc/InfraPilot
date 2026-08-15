@@ -176,7 +176,7 @@ func (h *Handler) upsertService(c *gin.Context) {
 		req.ImageTag = "latest"
 	}
 
-	cfgJSON, err := json.Marshal(req.ContainerConfig)
+	cfgJSON, err := h.marshalContainerConfig(req.ContainerConfig)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid container_config"})
 		return
@@ -331,7 +331,7 @@ func (h *Handler) deployService(c *gin.Context) {
 
 	// Insert deployment record
 	deploymentID := uuid.New()
-	cfgBytes, _ := json.Marshal(containerConfig)
+	cfgBytes, _ := h.marshalContainerConfig(containerConfig)
 	_, err = h.db.Exec(c.Request.Context(), `
 		INSERT INTO deployments (
 			id, org_id, agent_id, service_name, environment,

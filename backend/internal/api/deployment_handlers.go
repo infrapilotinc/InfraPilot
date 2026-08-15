@@ -285,7 +285,7 @@ func (h *Handler) createDeployment(c *gin.Context) {
 	var containerConfigJSON []byte
 	if req.ContainerConfig != nil {
 		var err error
-		containerConfigJSON, err = json.Marshal(req.ContainerConfig)
+		containerConfigJSON, err = h.marshalContainerConfig(req.ContainerConfig)
 		if err != nil {
 			h.logger.Error("Failed to marshal container config", zap.Error(err))
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid container config"})
@@ -322,6 +322,10 @@ func (h *Handler) createDeployment(c *gin.Context) {
 		zap.String("service", req.ServiceName),
 		zap.String("environment", req.Environment),
 	)
+
+	// Funnel telemetry (v3/40): the activation milestone. EmitOnce fires only on the
+	// instance's first-ever deploy; carries no app/repo details (privacy contract).
+	h.telemetry.EmitOnce("first_deploy", nil)
 
 	// Register/refresh the service config so this deployment shows up as an app
 	// (the Apps list reads service_configs) and can be redeployed later. For source
@@ -576,6 +580,12 @@ func (h *Handler) deployContainerToAgent(ctx context.Context, orgID, deploymentI
 
 	// Add container configuration if provided
 	if containerConfig != nil {
+		// Decrypt any at-rest-encrypted secret values before they're injected. This is the
+		// single dispatch funnel for secrets, and decrypt is a no-op on plaintext (fresh
+		// requests) and legacy unencrypted rows — so it safely covers every path. See
+		// secrets_crypto.go.
+		h.decryptSecretValues(containerConfig.Secrets)
+
 		// Add environment variables
 		if len(containerConfig.EnvVars) > 0 && containerConfig.SecretMethod != "docker_secrets" {
 			options["env"] = containerConfig.EnvVars

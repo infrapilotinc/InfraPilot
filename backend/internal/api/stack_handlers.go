@@ -810,7 +810,7 @@ func (h *Handler) createStack(c *gin.Context) {
 			}
 		}
 
-		containerConfigJSON, _ := json.Marshal(containerConfig)
+		containerConfigJSON, _ := h.marshalContainerConfig(containerConfig)
 
 		// Create deployment record
 		var deploymentID uuid.UUID
