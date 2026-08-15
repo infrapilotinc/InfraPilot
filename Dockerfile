@@ -14,7 +14,7 @@
 # -------------------------------------------------------------
 # Stage 1: Build Backend
 # -------------------------------------------------------------
-FROM golang:1.24-alpine AS backend-builder
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS backend-builder
 
 WORKDIR /build
 
@@ -36,7 +36,7 @@ RUN cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
 # -------------------------------------------------------------
 # Stage 2: Build Agent
 # -------------------------------------------------------------
-FROM golang:1.24-alpine AS agent-builder
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS agent-builder
 
 WORKDIR /build
 
@@ -55,7 +55,7 @@ RUN cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
 # -------------------------------------------------------------
 # Stage 3: Build Frontend
 # -------------------------------------------------------------
-FROM node:22-alpine AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-builder
 
 WORKDIR /build
 

@@ -2,7 +2,7 @@
 # InfraPilot Agent - Host Controller
 # =============================================================
 
-FROM golang:1.23-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS builder
 
 WORKDIR /build
 

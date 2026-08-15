@@ -29,6 +29,10 @@ set -e
 #   --platform    Target platform(s) (e.g., linux/amd64,linux/arm64)
 #   --amd64       Shortcut: build amd64 only (fast — no arm64 emulation)
 #   --arm64       Shortcut: build arm64 only
+#   --sequential  Build each platform one at a time and stitch the results into the
+#                 multi-arch manifest afterward (docker buildx imagetools create), instead
+#                 of one buildx invocation compiling every platform concurrently. Use on
+#                 memory-constrained hosts where a true multi-arch build OOMs.
 #   --docker-only Push to Docker Hub only (skip GHCR — what CE installs pull)
 #   --ghcr-only   Push to GHCR only (skip Docker Hub)
 #   --garble      Obfuscate the agent binary (release builds; slow under emulation, off by default)
@@ -96,6 +100,7 @@ NO_CACHE=""
 # Agent obfuscation: 1=garble on, 0=off (default). Off is much faster, especially under
 # arm64 emulation; turn on for release builds with --garble. Only affects the agent image.
 GARBLE="${GARBLE:-0}"
+SEQUENTIAL="${SEQUENTIAL:-false}"  # build platforms one at a time, then stitch
 
 # Process options
 shift || true
@@ -163,6 +168,10 @@ while [[ $# -gt 0 ]]; do
             PLATFORMS="$2"
             shift 2
             ;;
+        --sequential)
+            SEQUENTIAL=true
+            shift
+            ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
             exit 1
@@ -196,6 +205,47 @@ ensure_builder() {
     docker run --privileged --rm tonistiigi/binfmt --install all >/dev/null 2>&1 || true
 }
 
+# Build each platform in $PLATFORMS (comma list) separately and push it to an
+# arch-suffixed tag, then stitch the results into the real version tag (and :latest, for
+# a genuine multi-arch set) with `docker buildx imagetools create` — a registry-side
+# manifest merge, no local compute. Keeps peak memory to a single platform's build instead
+# of buildx's default of compiling every requested platform in one invocation, which OOMs
+# on small hosts.
+#   $1 dockerfile   $2 context   $3 dh image (no tag, "" to skip)   $4 ghcr image (no tag, "" to skip)
+#   $5.. extra build args
+sequential_buildx() {
+    local dockerfile="$1" context="$2" dh="$3" ghcr="$4"; shift 4
+
+    local plats=()
+    IFS=',' read -ra plats <<< "$PLATFORMS"
+
+    local dh_refs=() ghcr_refs=()
+    for p in "${plats[@]}"; do
+        local arch="${p#linux/}"
+        echo -e "${BLUE}→ Building ${p}...${NC}"
+        local tags=()
+        [ -n "$dh" ] && tags+=(-t "${dh}:${VERSION}-${arch}")
+        [ -n "$ghcr" ] && tags+=(-t "${ghcr}:${VERSION}-${arch}")
+        docker buildx build --platform "$p" $NO_CACHE "$@" \
+            "${tags[@]}" --push \
+            -f "$dockerfile" "$context"
+        [ -n "$dh" ] && dh_refs+=("${dh}:${VERSION}-${arch}")
+        [ -n "$ghcr" ] && ghcr_refs+=("${ghcr}:${VERSION}-${arch}")
+    done
+
+    echo -e "${BLUE}→ Stitching multi-arch manifest...${NC}"
+    if [ -n "$dh" ]; then
+        local dh_out=(-t "${dh}:${VERSION}")
+        [ "$VERSION" != "latest" ] && dh_out+=(-t "${dh}:latest")
+        docker buildx imagetools create "${dh_out[@]}" "${dh_refs[@]}"
+    fi
+    if [ -n "$ghcr" ]; then
+        local ghcr_out=(-t "${ghcr}:${VERSION}")
+        [ "$VERSION" != "latest" ] && ghcr_out+=(-t "${ghcr}:latest")
+        docker buildx imagetools create "${ghcr_out[@]}" "${ghcr_refs[@]}"
+    fi
+}
+
 # Build one image for all target platforms and push a multi-arch manifest to both
 # registries in a SINGLE invocation. Plain `docker build` + `docker push` can only
 # emit a single-arch image — which is exactly why arm64 pulls failed. With --no-push
@@ -204,6 +254,14 @@ ensure_builder() {
 buildx_image() {
     local name="$1" dockerfile="$2" context="$3"; shift 3
     local dh="${DH_PREFIX}${name}" ghcr="${GHCR_PREFIX}${name}"
+
+    if [ "$PUSH" = true ] && [ "$SEQUENTIAL" = true ] && [[ "$PLATFORMS" == *,* ]]; then
+        local dh_arg="" ghcr_arg=""
+        [ "$PUSH_DOCKERHUB" = true ] && dh_arg="$dh"
+        [ "$PUSH_GHCR" = true ] && ghcr_arg="$ghcr"
+        sequential_buildx "$dockerfile" "$context" "$dh_arg" "$ghcr_arg" "$@"
+        return
+    fi
 
     local tags=()
     [ "$PUSH_DOCKERHUB" = true ] && tags+=(-t "${dh}:${VERSION}")
