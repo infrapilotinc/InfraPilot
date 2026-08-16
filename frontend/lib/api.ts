@@ -3419,6 +3419,24 @@ export interface CreateStackRequest {
   variables?: Record<string, string>;
   overrides?: ServiceOverride[];
   skip_scanning?: boolean;
+  // Stack companion files (v3/45): the files this compose bind-mounts, keyed by their
+  // stack-root-relative path. Required whenever parsed.required_files is non-empty.
+  files?: StackFile[];
+}
+
+// StackFile is a companion file shipped with a stack deploy (v3/45).
+export interface StackFile {
+  path: string; // stack-root-relative, e.g. "scripts/db-init.sh"
+  content: string;
+  mode?: string; // octal, e.g. "0755"; default "0644"
+}
+
+// RequiredFile is a relative bind-mount source the compose needs supplied as a companion file (v3/45).
+export interface RequiredFile {
+  source: string; // as written, e.g. "./scripts/db-init.sh"
+  path: string; // normalized stack-root-relative path, e.g. "scripts/db-init.sh"
+  service: string;
+  target: string; // in-container mount path
 }
 
 export interface ServiceOverride {
@@ -3438,6 +3456,7 @@ export interface ParsedCompose {
   networks: ComposeNetwork[];
   volumes: ComposeVolume[];
   variables: ComposeVariable[];
+  required_files?: RequiredFile[];
   errors?: string[];
 }
 

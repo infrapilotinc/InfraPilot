@@ -48,7 +48,7 @@ export interface StackDeployWizardProps {
   onSuccess?: (stackId: string) => void;
 }
 
-type WizardStep = "yaml" | "variables" | "services" | "resources" | "review";
+type WizardStep = "yaml" | "variables" | "services" | "resources" | "files" | "review";
 type DeployStage = "wizard" | "deploying" | "success" | "error";
 
 const WIZARD_STEPS: { id: WizardStep; label: string; icon: React.ElementType }[] = [
@@ -56,6 +56,7 @@ const WIZARD_STEPS: { id: WizardStep; label: string; icon: React.ElementType }[]
   { id: "variables", label: "Variables", icon: Variable },
   { id: "services", label: "Services", icon: Server },
   { id: "resources", label: "Resources", icon: Network },
+  { id: "files", label: "Files", icon: FileText },
   { id: "review", label: "Review", icon: CheckCircle },
 ];
 
@@ -84,6 +85,10 @@ export function StackDeployWizard({
   const [environment, setEnvironment] = useState("dev");
   const [parseError, setParseError] = useState<string | null>(null);
   const [parsedCompose, setParsedCompose] = useState<ParsedCompose | null>(null);
+
+  // v3/45 — companion files: content for each relative bind mount the compose ships (init scripts,
+  // entrypoints, configs), keyed by the required file's normalized path.
+  const [companionFiles, setCompanionFiles] = useState<Record<string, { content: string; executable: boolean }>>({});
 
   // Step 2: Variables
   const [variables, setVariables] = useState<Record<string, string>>({});
@@ -203,6 +208,7 @@ export function StackDeployWizard({
       setEnvironment("dev");
       setParseError(null);
       setParsedCompose(null);
+      setCompanionFiles({});
       setVariables({});
       setEnvInputMethod("manual");
       setEnvFileContent("");
@@ -380,6 +386,11 @@ export function StackDeployWizard({
         return Object.values(serviceConfigs).some((c) => c.enabled);
       case "resources":
         return true;
+      case "files": {
+        // Fail-closed: every relative bind-mount source must be supplied before deploy (v3/45).
+        const required = parsedCompose?.required_files ?? [];
+        return required.every((rf) => (companionFiles[rf.path]?.content ?? "").length > 0);
+      }
       case "review":
         return true;
       default:
@@ -421,6 +432,14 @@ export function StackDeployWizard({
       })
     );
 
+    // v3/45 — companion files: send the content for each relative bind mount the compose ships.
+    const files = (parsedCompose?.required_files ?? [])
+      .map((rf) => {
+        const f = companionFiles[rf.path];
+        return f ? { path: rf.path, content: f.content, mode: f.executable ? "0755" : "0644" } : null;
+      })
+      .filter((f): f is { path: string; content: string; mode: string } => f !== null);
+
     createStackMutation.mutate({
       name: stackName,
       environment,
@@ -428,6 +447,7 @@ export function StackDeployWizard({
       variables: Object.keys(variables).length > 0 ? variables : undefined,
       overrides: overrides.length > 0 ? overrides : undefined,
       skip_scanning: skipScanning,
+      files: files.length > 0 ? files : undefined,
     });
   };
 
@@ -959,6 +979,90 @@ export function StackDeployWizard({
             </div>
           </div>
         );
+
+      case "files": {
+        // v3/45 — companion files: supply each relative bind-mount source (init scripts, entrypoints,
+        // configs) the compose ships. Fail-closed: Deploy is blocked until every one has content.
+        const required = parsedCompose?.required_files ?? [];
+        const setFile = (path: string, source: string, content: string) =>
+          setCompanionFiles((p) => ({
+            ...p,
+            [path]: { content, executable: p[path]?.executable ?? source.endsWith(".sh") },
+          }));
+        return (
+          <div className="space-y-4">
+            <div className="flex items-start gap-2 text-sm text-zinc-300">
+              <FileText className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              <span>
+                This compose bind-mounts local files (scripts, entrypoints, configs). Paste or upload
+                each one — they are written to the host and mounted when the stack deploys.
+              </span>
+            </div>
+            {required.length > 0 ? (
+              <div className="space-y-3">
+                {required.map((rf) => {
+                  const cur = companionFiles[rf.path];
+                  const provided = (cur?.content ?? "").length > 0;
+                  return (
+                    <div key={rf.path} className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-700 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="font-mono text-sm text-white">{rf.source}</span>
+                          <div className="text-[11px] text-zinc-500 truncate">
+                            {rf.service} → <span className="font-mono">{rf.target}</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 flex-shrink-0">
+                          {provided ? (
+                            <CheckCircle className="h-4 w-4 text-green-500" />
+                          ) : (
+                            <span className="text-[11px] text-amber-400">required</span>
+                          )}
+                          <label className="flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={cur?.executable ?? rf.source.endsWith(".sh")}
+                              onChange={(e) =>
+                                setCompanionFiles((p) => ({
+                                  ...p,
+                                  [rf.path]: { content: p[rf.path]?.content ?? "", executable: e.target.checked },
+                                }))
+                              }
+                            />
+                            Executable
+                          </label>
+                        </div>
+                      </div>
+                      <textarea
+                        value={cur?.content ?? ""}
+                        onChange={(e) => setFile(rf.path, rf.source, e.target.value)}
+                        placeholder={`Paste the contents of ${rf.source}…`}
+                        rows={5}
+                        className="w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs font-mono text-white"
+                      />
+                      <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer">
+                        <Upload className="h-3.5 w-3.5" />
+                        <span>Upload file</span>
+                        <input
+                          type="file"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (file) setFile(rf.path, rf.source, await file.text());
+                            e.target.value = ""; // allow re-selecting the same file
+                          }}
+                        />
+                      </label>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-sm text-zinc-500">This stack bind-mounts no local files — nothing to supply.</p>
+            )}
+          </div>
+        );
+      }
 
       case "review":
         return (
