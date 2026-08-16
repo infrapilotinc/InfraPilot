@@ -94,6 +94,11 @@ type ContainerConfigVolume struct {
 	CreateIfMissing bool    `json:"create_if_missing,omitempty"`
 	HostPath        *string `json:"host_path,omitempty"`
 	ReadOnly        bool    `json:"read_only,omitempty"`
+	// Stack companion files (v3/45): when Content is non-nil, HostPath is a stack-root path the
+	// agent materializes from Content (with FileMode) before mounting — lets a pasted-compose stack
+	// ship the files it bind-mounts. Never persisted with the compose.
+	Content  *string `json:"content,omitempty"`
+	FileMode string  `json:"file_mode,omitempty"`
 }
 
 // DeploymentContainerConfig contains the extended container configuration for deployments
@@ -643,6 +648,14 @@ func (h *Handler) deployContainerToAgent(ctx context.Context, orgID, deploymentI
 				}
 				if v.HostPath != nil {
 					volOpt["host_path"] = *v.HostPath
+				}
+				// Stack companion file (v3/45): ship content + mode so the agent materializes the
+				// bind source on the host before mounting.
+				if v.Content != nil {
+					volOpt["content"] = *v.Content
+					if v.FileMode != "" {
+						volOpt["file_mode"] = v.FileMode
+					}
 				}
 				volumesOpts[i] = volOpt
 			}

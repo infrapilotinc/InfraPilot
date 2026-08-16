@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -56,7 +57,33 @@ type CreateStackRequest struct {
 	Variables    map[string]string `json:"variables,omitempty"`
 	Overrides    []ServiceOverride `json:"overrides,omitempty"`
 	SkipScanning bool              `json:"skip_scanning,omitempty"`
+	// Stack companion files (v3/45): the files this compose bind-mounts (init scripts, entrypoints,
+	// configs), keyed by their relative bind source ("./scripts/db-init.sh" → path "scripts/db-init.sh").
+	// The agent materializes them on the host at deploy; never persisted with the stack.
+	Files []StackFile `json:"files,omitempty"`
 }
+
+// StackFile is a companion file shipped alongside the compose (v3/45).
+type StackFile struct {
+	Path    string `json:"path"`           // relative to the stack root, e.g. "scripts/db-init.sh"
+	Content string `json:"content"`        // file body (plaintext)
+	Mode    string `json:"mode,omitempty"` // octal, e.g. "0755"; default "0644"
+}
+
+// RequiredFile is a relative bind-mount source a compose needs supplied as a companion file (v3/45).
+type RequiredFile struct {
+	Source  string `json:"source"`  // as written in compose, e.g. "./scripts/db-init.sh"
+	Path    string `json:"path"`    // normalized stack-root-relative path, e.g. "scripts/db-init.sh"
+	Service string `json:"service"` // the service that bind-mounts it
+	Target  string `json:"target"`  // the in-container mount path
+}
+
+// maxCompanionFileBytes caps a single companion file (v3/45) — scripts/configs are small.
+const maxCompanionFileBytes = 1 << 20 // 1 MiB
+
+// stackFilesBasePath is the host root where the agent materializes companion files. MUST match the
+// agent's stackFilesBasePath (agent/internal/docker/client.go).
+const stackFilesBasePath = "/var/lib/infrapilot/stacks"
 
 type ServiceOverride struct {
 	ServiceName  string            `json:"service_name"`
@@ -75,7 +102,10 @@ type ParsedCompose struct {
 	Networks    []ComposeNetwork    `json:"networks"`
 	Volumes     []ComposeVolume     `json:"volumes"`
 	Variables   []ComposeVariable   `json:"variables"`
-	Errors      []string            `json:"errors,omitempty"`
+	// RequiredFiles are relative bind-mount sources the compose needs shipped as companion files
+	// (v3/45) — the wizard prompts for each, deploy is fail-closed until all are supplied.
+	RequiredFiles []RequiredFile `json:"required_files,omitempty"`
+	Errors        []string       `json:"errors,omitempty"`
 }
 
 type ComposeService struct {
@@ -271,12 +301,90 @@ func parseCompose(yamlContent string, variables map[string]string) (*ParsedCompo
 	}
 
 	return &ParsedCompose{
-		Services:  services,
-		Networks:  networks,
-		Volumes:   volumes,
-		Variables: varList,
-		Errors:    errors,
+		Services:      services,
+		Networks:      networks,
+		Volumes:       volumes,
+		Variables:     varList,
+		RequiredFiles: collectRequiredFiles(services),
+		Errors:        errors,
 	}, nil
+}
+
+// ==================== Stack companion files (v3/45) ====================
+
+// splitVolumeDef splits a compose volume entry "src:dst[:mode]" into its parts. ok=false if it is
+// not a bind/named mount (fewer than 2 parts). A leading absolute Windows-style path is out of
+// scope (agents are Linux).
+func splitVolumeDef(volDef string) (source, target string, readOnly, ok bool) {
+	parts := strings.Split(volDef, ":")
+	if len(parts) < 2 {
+		return "", "", false, false
+	}
+	return parts[0], parts[1], len(parts) >= 3 && parts[2] == "ro", true
+}
+
+// isRelativeBindSource reports whether a compose bind source is a RELATIVE host path — the case
+// that needs a companion file (v3/45). Named volumes (no "." / "/" prefix) and absolute host paths
+// are excluded.
+func isRelativeBindSource(src string) bool {
+	return strings.HasPrefix(src, "./") || strings.HasPrefix(src, "../") || src == "." || src == ".."
+}
+
+// normalizeCompanionPath turns a relative bind source ("./scripts/db-init.sh") into a clean,
+// stack-root-relative path ("scripts/db-init.sh"). ok=false for traversal or absolute escapes —
+// callers treat that as a hard error (fail-closed).
+func normalizeCompanionPath(src string) (string, bool) {
+	p := strings.TrimPrefix(src, "./")
+	if p == "" || strings.HasPrefix(p, "/") {
+		return "", false
+	}
+	if p == ".." || strings.HasPrefix(p, "../") || strings.Contains(p, "/../") || strings.HasSuffix(p, "/..") {
+		return "", false
+	}
+	cleaned := path.Clean(p)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/") {
+		return "", false
+	}
+	return cleaned, true
+}
+
+// collectRequiredFiles scans every service's bind mounts for relative sources and returns the set
+// the deploy must be supplied as companion files (v3/45), de-duplicated by normalized path.
+func collectRequiredFiles(services []ComposeService) []RequiredFile {
+	var out []RequiredFile
+	seen := map[string]bool{}
+	for _, svc := range services {
+		for _, volDef := range svc.Volumes {
+			source, target, _, ok := splitVolumeDef(volDef)
+			if !ok || !isRelativeBindSource(source) {
+				continue
+			}
+			norm, ok := normalizeCompanionPath(source)
+			if !ok || seen[norm] {
+				continue
+			}
+			seen[norm] = true
+			out = append(out, RequiredFile{Source: source, Path: norm, Service: svc.Name, Target: target})
+		}
+	}
+	return out
+}
+
+// sanitizeStackDirName makes a stack name safe as a single host path segment (v3/45).
+func sanitizeStackDirName(name string) string {
+	safe := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			return r
+		default:
+			return '_'
+		}
+	}, name)
+	safe = strings.TrimLeft(safe, ".") // no leading dots → no hidden/".." segment
+	if safe == "" {
+		return "stack"
+	}
+	return safe
 }
 
 // extractVariables finds all ${VAR}, ${VAR:-default}, ${VAR:?error} patterns
@@ -672,6 +780,37 @@ func (h *Handler) createStack(c *gin.Context) {
 		return
 	}
 
+	// Stack companion files (v3/45): index supplied files by normalized path and fail-closed if the
+	// compose bind-mounts a relative source we weren't given. The volume loop below rewrites each
+	// relative bind to an absolute stack-root path and attaches the content for the agent to write.
+	fileMap := map[string]StackFile{}
+	for _, f := range req.Files {
+		norm, ok := normalizeCompanionPath(f.Path)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid companion file path: " + f.Path})
+			return
+		}
+		if len(f.Content) > maxCompanionFileBytes {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "companion file exceeds 1 MiB: " + f.Path})
+			return
+		}
+		fileMap[norm] = f
+	}
+	var missingFiles []string
+	for _, rf := range parsed.RequiredFiles {
+		if _, ok := fileMap[rf.Path]; !ok {
+			missingFiles = append(missingFiles, rf.Source)
+		}
+	}
+	if len(missingFiles) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":          "this stack bind-mounts local files that must be supplied: " + strings.Join(missingFiles, ", "),
+			"required_files": parsed.RequiredFiles,
+		})
+		return
+	}
+	stackDir := sanitizeStackDirName(req.Name)
+
 	// Build override map for quick lookup
 	overrideMap := make(map[string]ServiceOverride)
 	for _, o := range req.Overrides {
@@ -793,11 +932,32 @@ func (h *Handler) createStack(c *gin.Context) {
 				// Check if it's a named volume or bind mount
 				if strings.HasPrefix(volName, "/") || strings.HasPrefix(volName, ".") {
 					// Bind mount
-					containerConfig.Volumes = append(containerConfig.Volumes, ContainerConfigVolume{
-						HostPath:  &volName,
-						MountPath: mountPath,
-						ReadOnly:  readOnly,
-					})
+					if isRelativeBindSource(volName) {
+						// Companion file (v3/45): rewrite the relative source to an absolute stack-root
+						// path on the host and attach the content so the agent materializes it there
+						// before mounting. Presence was already validated (fail-closed) above.
+						norm, ok := normalizeCompanionPath(volName)
+						if !ok {
+							continue // defensive: validation would have rejected this
+						}
+						f := fileMap[norm]
+						hostPath := stackFilesBasePath + "/" + stackDir + "/" + norm
+						content := f.Content
+						containerConfig.Volumes = append(containerConfig.Volumes, ContainerConfigVolume{
+							HostPath:  &hostPath,
+							MountPath: mountPath,
+							ReadOnly:  readOnly,
+							Content:   &content,
+							FileMode:  f.Mode,
+						})
+					} else {
+						// Absolute host path — must already exist on the target host.
+						containerConfig.Volumes = append(containerConfig.Volumes, ContainerConfigVolume{
+							HostPath:  &volName,
+							MountPath: mountPath,
+							ReadOnly:  readOnly,
+						})
+					}
 				} else {
 					// Named volume
 					containerConfig.Volumes = append(containerConfig.Volumes, ContainerConfigVolume{

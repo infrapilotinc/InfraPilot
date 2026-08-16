@@ -1160,7 +1160,17 @@ type VolumeConfig struct {
 	CreateIfMissing bool   `json:"create_if_missing,omitempty"`
 	HostPath        string `json:"host_path,omitempty"`
 	ReadOnly        bool   `json:"read_only,omitempty"`
+	// Stack companion files (v3/45): when Content is non-nil, this bind's HostPath does not yet
+	// exist on the host — the agent materializes it there (with FileMode) before mounting. Lets a
+	// pasted-compose stack ship the files it bind-mounts (init scripts, entrypoints, configs).
+	Content  *string `json:"content,omitempty"`
+	FileMode string  `json:"file_mode,omitempty"` // octal, e.g. "0755"; default "0644"
 }
+
+// stackFilesBasePath is the host root under which stack companion files are materialized. Bind
+// sources for companion files must live under it (defense-in-depth against a malformed command
+// writing arbitrary host paths). Mirrors secretsBasePath. (v3/45)
+const stackFilesBasePath = "/var/lib/infrapilot/stacks"
 
 // ContainerRunExtendedConfig holds extended configuration for running a container
 type ContainerRunExtendedConfig struct {
@@ -1413,6 +1423,12 @@ func (c *Client) RunContainerExtended(ctx context.Context, cfg ContainerRunExten
 			continue
 		}
 		if volCfg.HostPath != "" {
+			// Stack companion file (v3/45): materialize the bind source on the host before mounting.
+			if volCfg.Content != nil {
+				if err := c.CreateFileMount(ctx, volCfg.HostPath, *volCfg.Content, volCfg.FileMode); err != nil {
+					return nil, fmt.Errorf("failed to materialize companion file %s: %w", volCfg.HostPath, err)
+				}
+			}
 			// Bind mount
 			mounts = append(mounts, mount.Mount{
 				Type:     mount.TypeBind,
@@ -1776,6 +1792,78 @@ func (c *Client) CreateFileSecret(ctx context.Context, name, value string) (stri
 	}
 
 	return secretPath, nil
+}
+
+// CreateFileMount materializes a stack companion file at an absolute host path (v3/45), so a
+// pasted-compose stack can bind-mount files it ships (init scripts, entrypoints, configs). Like
+// CreateFileSecret it runs a short-lived alpine helper that bind-mounts the host stacks root, so
+// the file is written on the HOST (where dockerd resolves the bind) — the agent itself runs inside
+// a container and cannot write host paths directly. hostPath must be an absolute, "../"-free path
+// under stackFilesBasePath (fail-closed). mode is octal (default "0644").
+func (c *Client) CreateFileMount(ctx context.Context, hostPath, content, mode string) error {
+	// Confine under the stacks root; reject traversal/escape (defense-in-depth — the backend
+	// already builds this path, but the agent must not trust it blindly).
+	if !strings.HasPrefix(hostPath, stackFilesBasePath+"/") || strings.Contains(hostPath, "/../") || strings.HasSuffix(hostPath, "/..") {
+		return fmt.Errorf("companion file path %q is not under %s", hostPath, stackFilesBasePath)
+	}
+	if mode == "" {
+		mode = "0644"
+	}
+	// Validate mode is 3-4 octal digits so it's safe to interpolate into the helper command.
+	if len(mode) < 3 || len(mode) > 4 {
+		return fmt.Errorf("invalid file mode %q", mode)
+	}
+	for _, r := range mode {
+		if r < '0' || r > '7' {
+			return fmt.Errorf("invalid file mode %q", mode)
+		}
+	}
+
+	// Create the parent dir and file on the host. Content is passed via env (never argv) so
+	// arbitrary bytes survive; printf '%s' emits it verbatim without interpreting escapes.
+	createCmd := fmt.Sprintf(`mkdir -p "$(dirname %q)" && printf '%%s' "$FILE_CONTENT" > %q && chmod %s %q`,
+		hostPath, hostPath, mode, hostPath)
+
+	containerConfig := &container.Config{
+		Image: "alpine:latest",
+		Cmd:   []string{"sh", "-c", createCmd},
+		Env:   []string{fmt.Sprintf("FILE_CONTENT=%s", content)},
+	}
+	hostConfig := &container.HostConfig{
+		Binds:      []string{stackFilesBasePath + ":" + stackFilesBasePath},
+		AutoRemove: true,
+	}
+
+	// Pull alpine if not present.
+	if _, _, err := c.cli.ImageInspectWithRaw(ctx, "alpine:latest"); err != nil {
+		reader, perr := c.cli.ImagePull(ctx, "alpine:latest", image.PullOptions{})
+		if perr != nil {
+			return fmt.Errorf("failed to pull alpine image: %w", perr)
+		}
+		defer reader.Close()
+		io.Copy(io.Discard, reader)
+	}
+
+	resp, err := c.cli.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, "")
+	if err != nil {
+		return fmt.Errorf("failed to create companion-file helper container: %w", err)
+	}
+	if err := c.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		c.cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+		return fmt.Errorf("failed to start companion-file helper container: %w", err)
+	}
+	statusCh, errCh := c.cli.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("error waiting for companion-file write: %w", err)
+		}
+	case status := <-statusCh:
+		if status.StatusCode != 0 {
+			return fmt.Errorf("companion-file write failed with exit code %d", status.StatusCode)
+		}
+	}
+	return nil
 }
 
 // RemoveFileSecret removes a file-based secret from the host filesystem

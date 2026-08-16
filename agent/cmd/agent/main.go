@@ -1607,6 +1607,13 @@ func (h *CommandHandler) handleDockerCommand(ctx context.Context, cmd *agentgrpc
 						CreateIfMissing: getBoolFromMap(volMap, "create_if_missing"),
 						HostPath:        getStringFromMap(volMap, "host_path"),
 						ReadOnly:        getBoolFromMap(volMap, "read_only"),
+						FileMode:        getStringFromMap(volMap, "file_mode"),
+					}
+					// Stack companion file (v3/45): presence of "content" marks a file to materialize
+					// on the host before mounting (empty string = an empty file, so key presence, not
+					// value, is the signal).
+					if cv, ok := volMap["content"].(string); ok {
+						volume.Content = &cv
 					}
 					volumes = append(volumes, volume)
 				}
