@@ -6058,6 +6058,16 @@ export const api = {
       method: "POST",
     }),
 
+  // Anonymous funnel telemetry opt-out (v3/40 G1b)
+  getPrivacySettings: () =>
+    fetchAPI<{ telemetry_enabled: boolean }>("/settings/privacy"),
+
+  updatePrivacySettings: (telemetryEnabled: boolean) =>
+    fetchAPI<{ telemetry_enabled: boolean }>("/settings/privacy", {
+      method: "PUT",
+      body: JSON.stringify({ telemetry_enabled: telemetryEnabled }),
+    }),
+
   // Generic fetch for custom endpoints
   fetchAPI: <T>(endpoint: string, options?: RequestInit) => fetchAPI<T>(endpoint, options),
 

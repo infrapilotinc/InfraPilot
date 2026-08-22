@@ -347,6 +347,10 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				settings.GET("/update/check", h.checkForUpdate)
 				settings.POST("/update/apply", h.applyUpdate)      // legacy fire-and-forget
 				settings.GET("/update/apply/stream", h.applyUpdateStream) // live SSE progress
+
+				// Anonymous funnel telemetry opt-out (v3/40 G1b)
+				settings.GET("/privacy", h.getPrivacySettings)
+				settings.PUT("/privacy", h.updatePrivacySettings)
 			}
 
 			// SSL/TLS Management

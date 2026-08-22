@@ -236,6 +236,11 @@ func (h *Handler) RequireManageAlerts() gin.HandlerFunc {
 func (h *Handler) RequireFeature(feature string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !h.license.HasFeature(feature) {
+			// Funnel telemetry (v3/40 G1b): a gated surface got hit. The feature name is
+			// sent verbatim (e.g. "vulnerability_scanning") rather than mapped onto doc
+			// 40's illustrative shorthand ("vuln_scan") — direct traceability to the real
+			// gate beats a lossy mapping table that has to be kept in sync.
+			h.telemetry.Emit("wall_hit", map[string]any{"wall": feature})
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error": "This feature is not available on your current plan",
 				"feature":     feature,

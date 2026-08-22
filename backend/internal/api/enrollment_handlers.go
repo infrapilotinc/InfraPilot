@@ -160,6 +160,9 @@ func (h *Handler) EnrollAgent(c *gin.Context) {
 	}
 
 	if agentCount >= maxAgents {
+		// Funnel telemetry (v3/40 G1b): the primary conversion wall — the user is trying
+		// to add a second server. High-intent signal per doc 39 §3.
+		h.telemetry.Emit("wall_hit", map[string]any{"wall": "second_server"})
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":      "Organization has reached maximum agent limit",
 			"max_agents": maxAgents,

@@ -90,9 +90,44 @@ func resolveInstanceID(dataDir string) string {
 	return id
 }
 
+// optOutMarker is the persisted, user-facing opt-out toggle (Settings → Privacy, v3/40 G1b) —
+// distinct from the INFRAPILOT_TELEMETRY=off env var, which disables the client entirely at
+// construction and always wins.
+func (c *Client) optOutMarker() string {
+	return filepath.Join(c.dataDir, ".telemetry_opt_out")
+}
+
+// OptedOut reports whether the Settings → Privacy toggle has disabled telemetry.
+func (c *Client) OptedOut() bool {
+	if c == nil {
+		return true
+	}
+	_, err := os.Stat(c.optOutMarker())
+	return err == nil
+}
+
+// SetOptOut persists the Settings → Privacy toggle.
+func (c *Client) SetOptOut(optOut bool) error {
+	if c == nil {
+		return nil
+	}
+	if optOut {
+		return os.WriteFile(c.optOutMarker(), []byte(time.Now().UTC().Format(time.RFC3339)), 0o600)
+	}
+	if err := os.Remove(c.optOutMarker()); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// active reports whether this client should actually send anything right now.
+func (c *Client) active() bool {
+	return c != nil && c.enabled && !c.OptedOut()
+}
+
 // Emit sends one event, fire-and-forget.
 func (c *Client) Emit(eventType string, meta map[string]any) {
-	if c == nil || !c.enabled {
+	if !c.active() {
 		return
 	}
 	p := map[string]any{
@@ -114,7 +149,7 @@ func (c *Client) Emit(eventType string, meta map[string]any) {
 // EmitOnce emits an event at most once per instance, guarded by a marker file in DataDir.
 // The marker's contents are the first-emit timestamp (used for days_since_install).
 func (c *Client) EmitOnce(eventType string, meta map[string]any) {
-	if c == nil || !c.enabled {
+	if !c.active() {
 		return
 	}
 	marker := filepath.Join(c.dataDir, ".tel_"+sanitize(eventType))

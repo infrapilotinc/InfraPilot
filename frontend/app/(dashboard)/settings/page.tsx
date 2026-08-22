@@ -631,10 +631,78 @@ function APIKeysSection() {
   );
 }
 
+function PrivacySection() {
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ["privacySettings"],
+    queryFn: () => api.getPrivacySettings(),
+  });
+
+  const mutation = useMutation({
+    mutationFn: (enabled: boolean) => api.updatePrivacySettings(enabled),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["privacySettings"] }),
+  });
+
+  const enabled = data?.telemetry_enabled ?? true;
+
+  return (
+    <Card>
+      <Card.Header>
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-primary-500/10 rounded-lg">
+            <Lock className="h-5 w-5 text-primary-400" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Privacy</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Control what this instance shares with infrapilot.org
+            </p>
+          </div>
+        </div>
+      </Card.Header>
+      <Card.Body>
+        <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700">
+          <div className="pr-4">
+            <p className="text-sm font-medium text-gray-900 dark:text-white">Anonymous usage telemetry</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              Sends an anonymous instance ID, install/deploy milestones, and coarse version/OS
+              info to help us see what&apos;s working — never app names, repo URLs, env vars, or
+              any of your infrastructure&apos;s content. Can also be disabled with the
+              <code className="mx-1 px-1 py-0.5 bg-gray-200 dark:bg-gray-700 rounded text-[11px]">
+                INFRAPILOT_TELEMETRY=off
+              </code>
+              environment variable.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            onClick={() => mutation.mutate(!enabled)}
+            disabled={isLoading || mutation.isPending}
+            className={cn(
+              "relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors disabled:opacity-50",
+              enabled ? "bg-primary-600" : "bg-gray-300 dark:bg-gray-700"
+            )}
+          >
+            <span
+              className={cn(
+                "inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform",
+                enabled ? "translate-x-5" : "translate-x-1"
+              )}
+            />
+          </button>
+        </div>
+      </Card.Body>
+    </Card>
+  );
+}
+
 export default function SettingsGeneralPage() {
   return (
     <div className="space-y-6">
       <SoftwareUpdateSection />
+      <PrivacySection />
       <InfraPilotDomainSection />
       <APIKeysSection />
     </div>

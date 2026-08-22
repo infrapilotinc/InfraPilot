@@ -237,6 +237,13 @@ export default function SetupPage() {
                 {adminLoading ? "Creating Account..." : "Create Admin Account →"}
               </button>
 
+              {/* First-run telemetry disclosure (v3/40 §2 privacy contract) */}
+              <p className="text-center text-xs text-gray-500 dark:text-gray-400">
+                InfraPilot sends anonymous, non-identifying usage telemetry by default — never
+                app names, repo URLs, env vars, or your infrastructure&apos;s content. Turn it
+                off anytime in Settings → Privacy.
+              </p>
+
               <p className="text-center text-xs text-gray-500 dark:text-gray-400">
                 Have an Enterprise license?{" "}
                 <button
