@@ -144,7 +144,16 @@ func (c *Client) StartHeartbeat(ctx context.Context) {
 }
 
 func (c *Client) heartbeat() {
+	tier := c.tierFn()
 	c.Emit("heartbeat", map[string]any{"days_since_install": c.daysSinceInstall()})
+	// G1e (v3/40): a paid tier observed on this instance, EmitOnce'd so it fires exactly
+	// once. Piggybacks the heartbeat's existing tierFn() read rather than instrumenting
+	// every license-validate call site — detected within one 24h heartbeat cycle, which
+	// is precise enough for a funnel event (the license server's own validate route does
+	// the real-time licenseId backfill; see v3/40 G1e).
+	if tier != "" && tier != "community" {
+		c.EmitOnce("converted", map[string]any{"tier": tier})
+	}
 }
 
 func (c *Client) daysSinceInstall() int {
