@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"regexp"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -1384,6 +1387,13 @@ func (h *Handler) deleteManagedStack(c *gin.Context) {
 		return
 	}
 
+	// Fetch the stack name up front (needed for the companion-files cleanup below; the row
+	// is gone after the DELETE further down).
+	var stackName string
+	_ = h.db.QueryRow(c.Request.Context(), `
+		SELECT name FROM stacks WHERE id = $1 AND org_id = $2 AND agent_id = $3
+	`, stackID, orgID, agentID).Scan(&stackName)
+
 	// Get all container IDs for this stack's deployments
 	rows, err := h.db.Query(c.Request.Context(), `
 		SELECT container_id
@@ -1406,15 +1416,26 @@ func (h *Handler) deleteManagedStack(c *gin.Context) {
 		}
 	}
 
-	// Stop containers via agent
+	// Actually stop + remove each container (was previously a no-op: this loop only logged
+	// and marked the DB row 'stopped' without ever touching the real container, so a stack
+	// delete silently left every container running). CE has no gRPC/ip-agent path — always
+	// local docker client, same as stopContainerReal/deleteContainerReal elsewhere in this file.
+	stoppedCount := 0
 	for _, cid := range containerIDs {
-		// Use agent grpc to stop containers
-		h.logger.Info("Stopping container for stack deletion",
-			zap.String("container_id", cid),
-			zap.String("stack_id", stackID.String()),
-		)
-		// The actual stop is handled by the agent
-		// We update deployment status
+		if err := stopAndRemoveContainer(c.Request.Context(), cid); err != nil {
+			h.logger.Warn("Failed to stop/remove container during stack deletion",
+				zap.String("container_id", cid),
+				zap.String("stack_id", stackID.String()),
+				zap.Error(err),
+			)
+			h.db.Exec(c.Request.Context(), `
+				UPDATE deployments
+				SET status_message = $3, updated_at = NOW()
+				WHERE stack_id = $1 AND container_id = $2
+			`, stackID, cid, "Stack deleted (container teardown failed: "+err.Error()+")")
+			continue
+		}
+		stoppedCount++
 		h.db.Exec(c.Request.Context(), `
 			UPDATE deployments
 			SET status = 'stopped', status_message = 'Stack deleted', updated_at = NOW()
@@ -1439,13 +1460,115 @@ func (h *Handler) deleteManagedStack(c *gin.Context) {
 		return
 	}
 
+	// Companion-files cleanup (v3/45 §5's promise, never actually implemented): remove the
+	// stack's host directory via a short-lived helper container, mirroring the agent's own
+	// write-side technique (the backend runs in its own container and cannot touch the host
+	// filesystem directly).
+	if stackName != "" {
+		if err := cleanupStackFiles(c.Request.Context(), stackName); err != nil {
+			h.logger.Warn("Failed to clean up stack companion files",
+				zap.String("stack_id", stackID.String()),
+				zap.String("stack_name", stackName),
+				zap.Error(err),
+			)
+		}
+	}
+
 	h.logger.Info("Stack deleted",
 		zap.String("stack_id", stackID.String()),
-		zap.Int("containers_stopped", len(containerIDs)),
+		zap.Int("containers_stopped", stoppedCount),
+		zap.Int("containers_total", len(containerIDs)),
 	)
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"message":            "stack deleted successfully",
-		"containers_stopped": len(containerIDs),
-	})
+		"containers_stopped": stoppedCount,
+	}
+	if stoppedCount < len(containerIDs) {
+		resp["message"] = fmt.Sprintf("stack deleted, but %d of %d container(s) could not be torn down (see server logs)", len(containerIDs)-stoppedCount, len(containerIDs))
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// stopAndRemoveContainer stops and removes a real Docker container. CE has no remote-agent
+// gRPC path (that's an EE/ip-agent-only concept) — always the local docker client, same as
+// stopContainerReal/deleteContainerReal elsewhere in this file.
+func stopAndRemoveContainer(ctx context.Context, containerID string) error {
+	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cli, err := getDockerClient()
+	if err != nil {
+		return fmt.Errorf("failed to connect to Docker: %w", err)
+	}
+	defer cli.Close()
+
+	timeout := 10
+	if err := cli.ContainerStop(dctx, containerID, dockercontainer.StopOptions{Timeout: &timeout}); err != nil {
+		return fmt.Errorf("failed to stop container: %w", err)
+	}
+	if err := cli.ContainerRemove(dctx, containerID, dockercontainer.RemoveOptions{Force: true}); err != nil {
+		return fmt.Errorf("failed to remove container: %w", err)
+	}
+	return nil
+}
+
+// cleanupStackFiles removes a deleted stack's companion-files directory (v3/45 §5) from the
+// host. Mirrors the agent's own CreateFileMount/RemoveFileSecret helper-container technique
+// (agent/internal/docker/client.go) — a short-lived alpine container bind-mounts the shared
+// stackFilesBasePath and rm -rf's the one stack's subdirectory.
+func cleanupStackFiles(ctx context.Context, stackName string) error {
+	dir := sanitizeStackDirName(stackName)
+	if dir == "" {
+		return fmt.Errorf("stack name %q sanitizes to an empty directory segment", stackName)
+	}
+	hostPath := stackFilesBasePath + "/" + dir
+
+	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cli, err := getDockerClient()
+	if err != nil {
+		return fmt.Errorf("failed to connect to Docker: %w", err)
+	}
+	defer cli.Close()
+
+	if _, _, err := cli.ImageInspectWithRaw(dctx, "alpine:latest"); err != nil {
+		reader, perr := cli.ImagePull(dctx, "alpine:latest", image.PullOptions{})
+		if perr != nil {
+			return fmt.Errorf("failed to pull alpine image: %w", perr)
+		}
+		defer reader.Close()
+		io.Copy(io.Discard, reader)
+	}
+
+	containerConfig := &dockercontainer.Config{
+		Image: "alpine:latest",
+		Cmd:   []string{"sh", "-c", fmt.Sprintf("rm -rf %q", hostPath)},
+	}
+	hostConfig := &dockercontainer.HostConfig{
+		Binds:      []string{stackFilesBasePath + ":" + stackFilesBasePath},
+		AutoRemove: true,
+	}
+
+	resp, err := cli.ContainerCreate(dctx, containerConfig, hostConfig, nil, nil, "")
+	if err != nil {
+		return fmt.Errorf("failed to create cleanup helper container: %w", err)
+	}
+	if err := cli.ContainerStart(dctx, resp.ID, dockercontainer.StartOptions{}); err != nil {
+		cli.ContainerRemove(dctx, resp.ID, dockercontainer.RemoveOptions{Force: true})
+		return fmt.Errorf("failed to start cleanup helper container: %w", err)
+	}
+	statusCh, errCh := cli.ContainerWait(dctx, resp.ID, dockercontainer.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("error waiting for stack cleanup: %w", err)
+		}
+	case status := <-statusCh:
+		if status.StatusCode != 0 {
+			return fmt.Errorf("stack cleanup failed with exit code %d", status.StatusCode)
+		}
+	}
+	return nil
 }
