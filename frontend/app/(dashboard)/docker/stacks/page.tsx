@@ -17,8 +17,9 @@ import {
   User,
   Trash2,
   FileCode,
+  RotateCcw,
 } from "lucide-react";
-import { api, Stack, Container, ManagedStack } from "@/lib/api";
+import { api, Stack, Container, ManagedStack, RedeployStackRequest } from "@/lib/api";
 import { useDocker } from "@/lib/docker-context";
 import { StatCard, MetricsGrid } from "@/components/ui/StatCard";
 import { Badge } from "@/components/ui/Badge";
@@ -27,6 +28,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/page-layout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FilterToolbar, ToggleOption } from "@/components/ui/FilterToolbar";
+import { StackRedeployModal } from "@/components/StackRedeployModal";
 import { cn } from "@/lib/utils";
 
 // Filter options
@@ -67,6 +69,8 @@ function DockerStacksPageContent() {
   const [searchFilter, setSearchFilter] = useState("");
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
   const [stackToDelete, setStackToDelete] = useState<UnifiedStack | null>(null);
+  const [stackToRedeploy, setStackToRedeploy] = useState<UnifiedStack | null>(null);
+  const [redeployError, setRedeployError] = useState<string | null>(null);
 
   // Fetch discovered stacks from Docker
   const { data: discoveredStacks, isLoading: isLoadingDiscovered } = useQuery({
@@ -92,6 +96,22 @@ function DockerStacksPageContent() {
       queryClient.invalidateQueries({ queryKey: ["stacks", selectedAgent] });
       queryClient.invalidateQueries({ queryKey: ["containers", selectedAgent] });
       setStackToDelete(null);
+    },
+  });
+
+  // Redeploy managed stack mutation
+  const redeployMutation = useMutation({
+    mutationFn: (request: RedeployStackRequest) =>
+      api.redeployStack(selectedAgent!, stackToRedeploy!.managedData!.id, request),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["managed-stacks", selectedAgent] });
+      queryClient.invalidateQueries({ queryKey: ["stacks", selectedAgent] });
+      queryClient.invalidateQueries({ queryKey: ["containers", selectedAgent] });
+      setStackToRedeploy(null);
+      setRedeployError(null);
+    },
+    onError: (error: Error) => {
+      setRedeployError(error.message || "Failed to redeploy stack");
     },
   });
 
@@ -270,6 +290,10 @@ function DockerStacksPageContent() {
               onToggleExpand={() => toggleExpanded(stack.name)}
               onOpenContainer={openContainerPanel}
               onDelete={() => setStackToDelete(stack)}
+              onRedeploy={() => {
+                setRedeployError(null);
+                setStackToRedeploy(stack);
+              }}
               renderStatusBadge={renderStatusBadge}
               renderEnvBadge={renderEnvBadge}
               formatRelativeTime={formatRelativeTime}
@@ -299,6 +323,20 @@ function DockerStacksPageContent() {
         variant="danger"
         isLoading={deleteMutation.isPending}
       />
+
+      {/* Redeploy */}
+      <StackRedeployModal
+        isOpen={!!stackToRedeploy}
+        agentId={selectedAgent ?? undefined}
+        stack={stackToRedeploy?.managedData ?? null}
+        onClose={() => {
+          setStackToRedeploy(null);
+          setRedeployError(null);
+        }}
+        onConfirm={(request) => redeployMutation.mutate(request)}
+        isLoading={redeployMutation.isPending}
+        errorMessage={redeployError}
+      />
     </div>
   );
 }
@@ -318,6 +356,7 @@ interface StackCardProps {
   onToggleExpand: () => void;
   onOpenContainer: (containerId: string) => void;
   onDelete: () => void;
+  onRedeploy: () => void;
   renderStatusBadge: (status: StackStatus) => React.ReactNode;
   renderEnvBadge: (env: string) => React.ReactNode;
   formatRelativeTime: (date: string) => string;
@@ -329,6 +368,7 @@ function StackCard({
   onToggleExpand,
   onOpenContainer,
   onDelete,
+  onRedeploy,
   renderStatusBadge,
   renderEnvBadge,
   formatRelativeTime,
@@ -399,13 +439,22 @@ function StackCard({
 
         <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
           {stack.isManaged && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={onDelete}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onRedeploy}
+              >
+                <RotateCcw className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onDelete}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </>
           )}
         </div>
       </div>

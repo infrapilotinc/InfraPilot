@@ -51,6 +51,9 @@ type Stack struct {
 	CreatedAt     time.Time         `json:"created_at"`
 	UpdatedAt     time.Time         `json:"updated_at"`
 	Deployments   []Deployment      `json:"deployments,omitempty"`
+	// RedeployServices is the persisted default service-name selection for stack-level
+	// redeploy; nil means "all services" (never explicitly saved yet).
+	RedeployServices []string `json:"redeploy_services,omitempty"`
 }
 
 type CreateStackRequest struct {
@@ -879,100 +882,7 @@ func (h *Handler) createStack(c *gin.Context) {
 			continue // Skip disabled services
 		}
 
-		// Determine image tag
-		imageRef := svc.Image
-		if hasOverride && override.TagOverride != nil {
-			// Apply tag override
-			parts := strings.Split(imageRef, ":")
-			imageRef = parts[0] + ":" + *override.TagOverride
-		}
-
-		// Parse image reference
-		imageRepo, imageTag := parseImageRef(imageRef)
-
-		// Merge environment variables
-		envVars := svc.Environment
-		if hasOverride && len(override.EnvOverrides) > 0 {
-			if envVars == nil {
-				envVars = make(map[string]string)
-			}
-			for k, v := range override.EnvOverrides {
-				envVars[k] = v
-			}
-		}
-
-		// Build container config with compose labels
-		containerConfig := &DeploymentContainerConfig{
-			ContainerName: svc.ContainerName,
-			EnvVars:       envVars,
-			Command:       svc.Command,
-			Labels: map[string]string{
-				"com.docker.compose.project": req.Name,
-				"com.docker.compose.service": svc.Name,
-			},
-		}
-
-		// Add networks with service name as alias (like Docker Compose does)
-		if len(svc.Networks) > 0 {
-			for _, netName := range svc.Networks {
-				containerConfig.Networks = append(containerConfig.Networks, ContainerConfigNetwork{
-					NetworkName:     &netName,
-					CreateIfMissing: true,
-					Driver:          "bridge",
-					Aliases:         []string{svc.Name},
-				})
-			}
-		}
-
-		// Add volumes
-		for _, volDef := range svc.Volumes {
-			parts := strings.Split(volDef, ":")
-			if len(parts) >= 2 {
-				volName := parts[0]
-				mountPath := parts[1]
-				readOnly := len(parts) >= 3 && parts[2] == "ro"
-
-				// Check if it's a named volume or bind mount
-				if strings.HasPrefix(volName, "/") || strings.HasPrefix(volName, ".") {
-					// Bind mount
-					if isRelativeBindSource(volName) {
-						// Companion file (v3/45): rewrite the relative source to an absolute stack-root
-						// path on the host and attach the content so the agent materializes it there
-						// before mounting. Presence was already validated (fail-closed) above.
-						norm, ok := normalizeCompanionPath(volName)
-						if !ok {
-							continue // defensive: validation would have rejected this
-						}
-						f := fileMap[norm]
-						hostPath := stackFilesBasePath + "/" + stackDir + "/" + norm
-						content := f.Content
-						containerConfig.Volumes = append(containerConfig.Volumes, ContainerConfigVolume{
-							HostPath:  &hostPath,
-							MountPath: mountPath,
-							ReadOnly:  readOnly,
-							Content:   &content,
-							FileMode:  f.Mode,
-						})
-					} else {
-						// Absolute host path — must already exist on the target host.
-						containerConfig.Volumes = append(containerConfig.Volumes, ContainerConfigVolume{
-							HostPath:  &volName,
-							MountPath: mountPath,
-							ReadOnly:  readOnly,
-						})
-					}
-				} else {
-					// Named volume
-					containerConfig.Volumes = append(containerConfig.Volumes, ContainerConfigVolume{
-						VolumeName:      &volName,
-						MountPath:       mountPath,
-						CreateIfMissing: true,
-						ReadOnly:        readOnly,
-					})
-				}
-			}
-		}
-
+		imageRepo, imageTag, containerConfig := buildServiceDeployConfig(svc, override, hasOverride, req.Name, stackDir, fileMap)
 		containerConfigJSON, _ := h.marshalContainerConfig(containerConfig)
 
 		// Create deployment record
@@ -1035,6 +945,108 @@ func parseImageRef(imageRef string) (string, *string) {
 
 	// No tag specified
 	return imageRef, nil
+}
+
+// buildServiceDeployConfig computes the image repo/tag and container config for one compose
+// service, applying an optional override and rewriting companion-file bind mounts to their
+// absolute stack-root host path. Shared by createStack (building new deployment rows) and
+// redeployManagedStack (rebuilding config for existing rows from a refreshed compose) — the
+// exact per-service translation must stay identical between the two call sites.
+func buildServiceDeployConfig(svc ComposeService, override ServiceOverride, hasOverride bool, stackName, stackDir string, fileMap map[string]StackFile) (imageRepo string, imageTag *string, containerConfig *DeploymentContainerConfig) {
+	// Determine image tag
+	imageRef := svc.Image
+	if hasOverride && override.TagOverride != nil {
+		// Apply tag override
+		parts := strings.Split(imageRef, ":")
+		imageRef = parts[0] + ":" + *override.TagOverride
+	}
+
+	imageRepo, imageTag = parseImageRef(imageRef)
+
+	// Merge environment variables
+	envVars := svc.Environment
+	if hasOverride && len(override.EnvOverrides) > 0 {
+		if envVars == nil {
+			envVars = make(map[string]string)
+		}
+		for k, v := range override.EnvOverrides {
+			envVars[k] = v
+		}
+	}
+
+	// Build container config with compose labels
+	containerConfig = &DeploymentContainerConfig{
+		ContainerName: svc.ContainerName,
+		EnvVars:       envVars,
+		Command:       svc.Command,
+		Labels: map[string]string{
+			"com.docker.compose.project": stackName,
+			"com.docker.compose.service": svc.Name,
+		},
+	}
+
+	// Add networks with service name as alias (like Docker Compose does)
+	if len(svc.Networks) > 0 {
+		for _, netName := range svc.Networks {
+			containerConfig.Networks = append(containerConfig.Networks, ContainerConfigNetwork{
+				NetworkName:     &netName,
+				CreateIfMissing: true,
+				Driver:          "bridge",
+				Aliases:         []string{svc.Name},
+			})
+		}
+	}
+
+	// Add volumes
+	for _, volDef := range svc.Volumes {
+		parts := strings.Split(volDef, ":")
+		if len(parts) >= 2 {
+			volName := parts[0]
+			mountPath := parts[1]
+			readOnly := len(parts) >= 3 && parts[2] == "ro"
+
+			// Check if it's a named volume or bind mount
+			if strings.HasPrefix(volName, "/") || strings.HasPrefix(volName, ".") {
+				// Bind mount
+				if isRelativeBindSource(volName) {
+					// Companion file (v3/45): rewrite the relative source to an absolute stack-root
+					// path on the host and attach the content so the agent materializes it there
+					// before mounting. Presence was already validated (fail-closed) by the caller.
+					norm, ok := normalizeCompanionPath(volName)
+					if !ok {
+						continue // defensive: validation would have rejected this
+					}
+					f := fileMap[norm]
+					hostPath := stackFilesBasePath + "/" + stackDir + "/" + norm
+					content := f.Content
+					containerConfig.Volumes = append(containerConfig.Volumes, ContainerConfigVolume{
+						HostPath:  &hostPath,
+						MountPath: mountPath,
+						ReadOnly:  readOnly,
+						Content:   &content,
+						FileMode:  f.Mode,
+					})
+				} else {
+					// Absolute host path — must already exist on the target host.
+					containerConfig.Volumes = append(containerConfig.Volumes, ContainerConfigVolume{
+						HostPath:  &volName,
+						MountPath: mountPath,
+						ReadOnly:  readOnly,
+					})
+				}
+			} else {
+				// Named volume
+				containerConfig.Volumes = append(containerConfig.Volumes, ContainerConfigVolume{
+					VolumeName:      &volName,
+					MountPath:       mountPath,
+					CreateIfMissing: true,
+					ReadOnly:        readOnly,
+				})
+			}
+		}
+	}
+
+	return imageRepo, imageTag, containerConfig
 }
 
 // ==================== Stack Deployment Pipeline ====================
@@ -1254,13 +1266,15 @@ func (h *Handler) getManagedStack(c *gin.Context) {
 
 	var s Stack
 	var variablesJSON []byte
+	var redeployServicesJSON []byte
 
 	err := h.db.QueryRow(c.Request.Context(), `
 		SELECT id, org_id, agent_id, name, environment,
 		       compose_yaml, variables,
 		       service_count, running_count, failed_count,
 		       status, status_message,
-		       deployed_by, deployed_at, created_at, updated_at
+		       deployed_by, deployed_at, created_at, updated_at,
+		       redeploy_services
 		FROM stacks
 		WHERE id = $1 AND org_id = $2 AND agent_id = $3
 	`, stackID, orgID, agentID).Scan(
@@ -1269,6 +1283,7 @@ func (h *Handler) getManagedStack(c *gin.Context) {
 		&s.ServiceCount, &s.RunningCount, &s.FailedCount,
 		&s.Status, &s.StatusMessage,
 		&s.DeployedBy, &s.DeployedAt, &s.CreatedAt, &s.UpdatedAt,
+		&redeployServicesJSON,
 	)
 
 	if err != nil {
@@ -1280,6 +1295,9 @@ func (h *Handler) getManagedStack(c *gin.Context) {
 	// Parse variables
 	if len(variablesJSON) > 0 {
 		json.Unmarshal(variablesJSON, &s.Variables)
+	}
+	if len(redeployServicesJSON) > 0 {
+		json.Unmarshal(redeployServicesJSON, &s.RedeployServices)
 	}
 
 	// Get associated deployments
@@ -1370,6 +1388,361 @@ func (h *Handler) getStackProgress(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, progress)
+}
+
+// ==================== Redeploy Stack ====================
+
+// RedeployStackRequest redeploys some or all of a managed stack's services, reusing the
+// stack's already-saved compose/variables/files unless new ones are supplied.
+type RedeployStackRequest struct {
+	// Services to redeploy. Empty/omitted = the stack's saved redeploy_services default, or
+	// (if that's also unset) every service currently in the stack.
+	Services []string `json:"services,omitempty"`
+	// Provide any of these to update the stack's saved config before redeploying; omit all
+	// three to redeploy with the existing saved config unchanged ("keep same").
+	ComposeYAML *string           `json:"compose_yaml,omitempty"`
+	Variables   map[string]string `json:"variables,omitempty"`
+	Files       []StackFile       `json:"files,omitempty"`
+	// PullLatest/SkipScanning mirror the single-deployment RedeployWizard options.
+	PullLatest bool `json:"pull_latest"`
+	// SkipScanning defaults to the stack's saved skip_scanning setting when omitted.
+	SkipScanning *bool `json:"skip_scanning,omitempty"`
+	// SaveSelection persists Services (after validation) as the stack's new default.
+	SaveSelection bool `json:"save_selection,omitempty"`
+}
+
+type redeployTarget struct {
+	DeploymentID    uuid.UUID
+	ImageRepository string
+	ImageTag        string
+	ContainerConfig *DeploymentContainerConfig
+}
+
+func (h *Handler) redeployManagedStack(c *gin.Context) {
+	orgID := c.MustGet("org_id").(uuid.UUID)
+	userID := c.MustGet("user_id").(uuid.UUID)
+	agentID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid agent ID"})
+		return
+	}
+	stackID, err := uuid.Parse(c.Param("sid"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid stack ID"})
+		return
+	}
+
+	req := RedeployStackRequest{PullLatest: true}
+	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Load the stack.
+	var (
+		stackName, environment, composeYAML                 string
+		variablesRaw, filesRaw, redeployServicesRaw          []byte
+		skipScanningDefault                                  bool
+	)
+	err = h.db.QueryRow(c.Request.Context(), `
+		SELECT name, environment, compose_yaml, variables, files, redeploy_services, skip_scanning
+		FROM stacks WHERE id = $1 AND org_id = $2 AND agent_id = $3
+	`, stackID, orgID, agentID).Scan(
+		&stackName, &environment, &composeYAML, &variablesRaw, &filesRaw, &redeployServicesRaw, &skipScanningDefault,
+	)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "stack not found"})
+		return
+	}
+
+	updatingConfig := req.ComposeYAML != nil || req.Variables != nil || req.Files != nil
+	if req.ComposeYAML != nil {
+		composeYAML = *req.ComposeYAML
+	}
+
+	variables := map[string]string{}
+	if len(variablesRaw) > 0 {
+		_ = json.Unmarshal(variablesRaw, &variables)
+	}
+	if req.Variables != nil {
+		variables = req.Variables
+	}
+
+	var files []StackFile
+	if len(filesRaw) > 0 {
+		_ = json.Unmarshal(filesRaw, &files)
+	}
+	if req.Files != nil {
+		files = req.Files
+	}
+
+	// Current "head" deployment per service — the latest row per service_name (redeploys
+	// chain via replaces_deployment_id, so the newest row per name is always the live one).
+	type svcHead struct {
+		DeploymentID    uuid.UUID
+		Order           int
+		ImageRepository string
+		ImageTag        *string
+		ContainerConfig []byte
+	}
+	rows, err := h.db.Query(c.Request.Context(), `
+		SELECT DISTINCT ON (service_name) service_name, id, service_order, image_repository, image_tag, container_config
+		FROM deployments
+		WHERE stack_id = $1
+		ORDER BY service_name, created_at DESC
+	`, stackID)
+	if err != nil {
+		h.logger.Error("Failed to load stack services for redeploy", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load stack services"})
+		return
+	}
+	heads := map[string]svcHead{}
+	for rows.Next() {
+		var name string
+		var head svcHead
+		if err := rows.Scan(&name, &head.DeploymentID, &head.Order, &head.ImageRepository, &head.ImageTag, &head.ContainerConfig); err != nil {
+			h.logger.Warn("Failed to scan stack service for redeploy", zap.Error(err))
+			continue
+		}
+		heads[name] = head
+	}
+	rows.Close()
+
+	if len(heads) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "this stack has no deployed services"})
+		return
+	}
+
+	// Resolve the target service set: request → saved default → all.
+	targetNames := req.Services
+	if len(targetNames) == 0 && len(redeployServicesRaw) > 0 {
+		_ = json.Unmarshal(redeployServicesRaw, &targetNames)
+	}
+	if len(targetNames) == 0 {
+		for name := range heads {
+			targetNames = append(targetNames, name)
+		}
+	}
+	var validTargets []string
+	for _, name := range targetNames {
+		if _, ok := heads[name]; ok {
+			validTargets = append(validTargets, name)
+		}
+	}
+	if len(validTargets) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "none of the requested services belong to this stack"})
+		return
+	}
+
+	// If the config is changing, re-parse + re-validate exactly like createStack (fail-closed
+	// on missing companion files) before touching anything.
+	var parsedByName map[string]ComposeService
+	fileMap := map[string]StackFile{}
+	stackDir := sanitizeStackDirName(stackName)
+	if updatingConfig {
+		parsed, err := parseCompose(composeYAML, variables)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to parse compose file", "details": err.Error()})
+			return
+		}
+		if len(parsed.Services) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "No services found in compose file"})
+			return
+		}
+		for _, f := range files {
+			norm, ok := normalizeCompanionPath(f.Path)
+			if !ok {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid companion file path: " + f.Path})
+				return
+			}
+			if len(f.Content) > maxCompanionFileBytes {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "companion file exceeds 1 MiB: " + f.Path})
+				return
+			}
+			fileMap[norm] = f
+		}
+		var missingFiles []string
+		for _, rf := range parsed.RequiredFiles {
+			if _, ok := fileMap[rf.Path]; !ok {
+				missingFiles = append(missingFiles, rf.Source)
+			}
+		}
+		if len(missingFiles) > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":          "this stack bind-mounts local files that must be supplied: " + strings.Join(missingFiles, ", "),
+				"required_files": parsed.RequiredFiles,
+			})
+			return
+		}
+		parsedByName = map[string]ComposeService{}
+		for _, s := range parsed.Services {
+			parsedByName[s.Name] = s
+		}
+	}
+
+	skipScanning := skipScanningDefault
+	if req.SkipScanning != nil {
+		skipScanning = *req.SkipScanning
+	}
+
+	if req.SaveSelection {
+		sel, _ := json.Marshal(validTargets)
+		h.db.Exec(c.Request.Context(), `UPDATE stacks SET redeploy_services = $1 WHERE id = $2`, sel, stackID)
+	}
+	if updatingConfig {
+		variablesJSON, _ := json.Marshal(variables)
+		filesJSON, _ := json.Marshal(files)
+		h.db.Exec(c.Request.Context(), `
+			UPDATE stacks SET compose_yaml = $1, variables = $2, files = $3, updated_at = NOW() WHERE id = $4
+		`, composeYAML, variablesJSON, filesJSON, stackID)
+	}
+
+	// Create a new, chained deployment row per target service (same versioning model as the
+	// single-deployment redeployDeployment: never mutate history in place) and collect what
+	// the pipeline needs to actually run each one.
+	var pipelineTargets []redeployTarget
+	for _, name := range validTargets {
+		head := heads[name]
+
+		var imageRepo string
+		var imageTagPtr *string
+		var containerConfig *DeploymentContainerConfig
+
+		if updatingConfig {
+			svc, ok := parsedByName[name]
+			if !ok {
+				// Service selected for redeploy but no longer present in the updated compose —
+				// skip it defensively rather than redeploy stale config under a name that no
+				// longer exists in the source of truth.
+				continue
+			}
+			imageRepo, imageTagPtr, containerConfig = buildServiceDeployConfig(svc, ServiceOverride{}, false, stackName, stackDir, fileMap)
+		} else {
+			imageRepo = head.ImageRepository
+			imageTagPtr = head.ImageTag
+			if len(head.ContainerConfig) > 0 {
+				_ = json.Unmarshal(head.ContainerConfig, &containerConfig)
+			}
+			if containerConfig == nil {
+				containerConfig = &DeploymentContainerConfig{}
+			}
+		}
+		containerConfig.PullLatest = req.PullLatest
+		containerConfigJSON, _ := h.marshalContainerConfig(containerConfig)
+
+		imageTag := ""
+		if imageTagPtr != nil {
+			imageTag = *imageTagPtr
+		}
+
+		newID := uuid.New()
+		_, err := h.db.Exec(c.Request.Context(), `
+			INSERT INTO deployments (
+				id, org_id, agent_id, service_name, environment,
+				image_repository, image_tag,
+				stack_id, service_order,
+				container_config, replaces_deployment_id,
+				status, deployed_by, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,NOW(),NOW())
+		`, newID, orgID, agentID, name, environment,
+			imageRepo, imageTagPtr, stackID, head.Order,
+			containerConfigJSON, head.DeploymentID, userID,
+		)
+		if err != nil {
+			h.logger.Error("Failed to create redeploy row", zap.String("service", name), zap.Error(err))
+			continue
+		}
+		pipelineTargets = append(pipelineTargets, redeployTarget{
+			DeploymentID:    newID,
+			ImageRepository: imageRepo,
+			ImageTag:        imageTag,
+			ContainerConfig: containerConfig,
+		})
+	}
+
+	if len(pipelineTargets) == 0 {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initiate redeploy for any service"})
+		return
+	}
+
+	h.updateStackStatus(c.Request.Context(), stackID, StackStatusDeploying, fmt.Sprintf("Redeploying %d service(s)", len(pipelineTargets)))
+	go h.runStackRedeployPipeline(context.Background(), orgID, stackID, pipelineTargets, skipScanning)
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":            stackID,
+		"status":        "deploying",
+		"service_count": len(pipelineTargets),
+		"message":       fmt.Sprintf("Redeploying %d service(s)", len(pipelineTargets)),
+	})
+}
+
+// runStackRedeployPipeline runs the same per-service pipeline runStackDeploymentPipeline
+// uses, scoped to just the redeployed targets, then recomputes the stack's overall
+// running/failed counts across ALL its current services (not just the redeployed subset) —
+// a partial redeploy shouldn't make the stack's status forget about untouched services.
+func (h *Handler) runStackRedeployPipeline(ctx context.Context, orgID, stackID uuid.UUID, targets []redeployTarget, skipScanning bool) {
+	logger := h.logger.With(zap.String("stack_id", stackID.String()))
+
+	for _, t := range targets {
+		logger.Info("Redeploying stack service", zap.String("deployment_id", t.DeploymentID.String()))
+		h.runDeploymentPipeline(ctx, orgID, t.DeploymentID, t.ImageRepository, t.ImageTag, "", t.ContainerConfig, skipScanning, false)
+	}
+
+	// Recompute running/failed across the current head of every service in the stack.
+	rows, err := h.db.Query(ctx, `
+		SELECT status FROM (
+			SELECT DISTINCT ON (service_name) service_name, status
+			FROM deployments
+			WHERE stack_id = $1
+			ORDER BY service_name, created_at DESC
+		) heads
+	`, stackID)
+	if err != nil {
+		logger.Error("Failed to recompute stack status after redeploy", zap.Error(err))
+		return
+	}
+	defer rows.Close()
+
+	total, running, failed := 0, 0, 0
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			continue
+		}
+		total++
+		switch status {
+		case "running":
+			running++
+		case "failed":
+			failed++
+		}
+	}
+
+	var finalStatus StackStatus
+	var finalMessage string
+	switch {
+	case total > 0 && running == total:
+		finalStatus, finalMessage = StackStatusRunning, fmt.Sprintf("All %d services running", total)
+	case total > 0 && failed == total:
+		finalStatus, finalMessage = StackStatusFailed, fmt.Sprintf("All %d services failed", total)
+	default:
+		finalStatus, finalMessage = StackStatusPartial, fmt.Sprintf("%d/%d services running, %d failed", running, total, failed)
+	}
+
+	if _, err := h.db.Exec(ctx, `
+		UPDATE stacks
+		SET status = $1, status_message = $2, running_count = $3, failed_count = $4, deployed_at = NOW(), updated_at = NOW()
+		WHERE id = $5
+	`, finalStatus, finalMessage, running, failed, stackID); err != nil {
+		logger.Error("Failed to update final stack status after redeploy", zap.Error(err))
+	}
+
+	logger.Info("Stack redeploy pipeline completed",
+		zap.String("status", string(finalStatus)),
+		zap.Int("redeployed", len(targets)),
+		zap.Int("running", running),
+		zap.Int("failed", failed),
+	)
 }
 
 // ==================== Delete Stack ====================

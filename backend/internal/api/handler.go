@@ -206,6 +206,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				agents.GET("/:id/managed-stacks", h.listManagedStacks)
 				agents.GET("/:id/managed-stacks/:sid", h.getManagedStack)
 				agents.GET("/:id/managed-stacks/:sid/progress", h.getStackProgress)
+				agents.POST("/:id/managed-stacks/:sid/redeploy", h.RequireModifyContainers(), h.redeployManagedStack)
 				agents.DELETE("/:id/managed-stacks/:sid", h.RequireModifyContainers(), h.deleteManagedStack)
 
 				agents.GET("/:id/webhooks", h.listWebhooks)

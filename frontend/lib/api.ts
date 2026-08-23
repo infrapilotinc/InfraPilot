@@ -3410,6 +3410,9 @@ export interface ManagedStack {
   created_at: string;
   updated_at: string;
   deployments?: Deployment[];
+  // Persisted default service-name selection for stack-level redeploy; absent/empty means
+  // "all services" (never explicitly saved yet).
+  redeploy_services?: string[];
 }
 
 export interface CreateStackRequest {
@@ -3422,6 +3425,18 @@ export interface CreateStackRequest {
   // Stack companion files (v3/45): the files this compose bind-mounts, keyed by their
   // stack-root-relative path. Required whenever parsed.required_files is non-empty.
   files?: StackFile[];
+}
+
+// RedeployStackRequest redeploys some or all of a managed stack's services, reusing the
+// stack's saved compose/variables/files unless new ones are supplied.
+export interface RedeployStackRequest {
+  services?: string[]; // empty/omitted = the stack's saved default, or all services
+  compose_yaml?: string; // provide to update; omit (with variables/files) to keep as-is
+  variables?: Record<string, string>;
+  files?: StackFile[];
+  pull_latest?: boolean; // default true
+  skip_scanning?: boolean; // default: the stack's saved setting
+  save_selection?: boolean; // persist `services` as the new default
 }
 
 // StackFile is a companion file shipped with a stack deploy (v3/45).
@@ -4636,6 +4651,12 @@ export const api = {
 
   getStackProgress: (agentId: string, stackId: string) =>
     fetchAPI<StackProgress>(`/agents/${agentId}/managed-stacks/${stackId}/progress`),
+
+  redeployStack: (agentId: string, stackId: string, request: RedeployStackRequest) =>
+    fetchAPI<{ id: string; status: string; service_count: number; message: string }>(
+      `/agents/${agentId}/managed-stacks/${stackId}/redeploy`,
+      { method: "POST", body: JSON.stringify(request) }
+    ),
 
   deleteStack: (agentId: string, stackId: string) =>
     fetchAPI<{ message: string; containers_stopped: number }>(`/agents/${agentId}/managed-stacks/${stackId}`, {

@@ -1,0 +1,2 @@
+ALTER TABLE stacks DROP COLUMN IF EXISTS redeploy_services;
+ALTER TABLE stacks DROP COLUMN IF EXISTS files;
