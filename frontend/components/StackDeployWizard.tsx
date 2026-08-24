@@ -66,6 +66,18 @@ interface ServiceConfig {
   envOverrides: Record<string, string>;
 }
 
+// Mirrors the backend's secretKeyHints (secrets_crypto.go) exactly — same convention as
+// infrapilot-ee's vault auto-promotion, so a compose file is flagged the same way in both
+// editions. Purely a UI hint; the backend re-checks independently at write time.
+const SECRET_KEY_HINTS = [
+  "KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASS", "PWD", "CREDENTIAL",
+  "PRIVATE", "AUTH", "APIKEY", "ACCESS", "CERT", "SALT", "SIGNING", "WEBHOOK",
+];
+function looksLikeSecretKey(name: string): boolean {
+  const upper = name.toUpperCase();
+  return SECRET_KEY_HINTS.some((hint) => upper.includes(hint));
+}
+
 export function StackDeployWizard({
   isOpen,
   onClose,
@@ -695,6 +707,14 @@ export function StackDeployWizard({
                           {v.required && !v.default && (
                             <span className="text-xs text-red-400 block">required</span>
                           )}
+                          {looksLikeSecretKey(v.name) && (
+                            <span
+                              className="text-[10px] text-emerald-400 block mt-0.5"
+                              title="This value looks like a secret — InfraPilot encrypts it at rest automatically, even on Community Edition."
+                            >
+                              🔒 Encrypted at rest
+                            </span>
+                          )}
                         </div>
                         <Input
                           value={variables[v.name] || ""}
@@ -715,10 +735,16 @@ export function StackDeployWizard({
               </>
             )}
 
-            <div className="pt-4 border-t border-zinc-800">
+            <div className="pt-4 border-t border-zinc-800 space-y-2">
               <p className="text-xs text-zinc-500">
                 Common variables: <code>REGISTRY</code> (e.g., ghcr.io/myorg),{" "}
                 <code>TAG</code> (e.g., latest, v1.0.0)
+              </p>
+              <p className="text-xs text-zinc-500">
+                🔒 Variables that look like passwords, tokens, or keys are automatically
+                encrypted at rest — free, on every plan. Want named secrets you can reuse
+                across stacks, external providers (Vault, AWS Secrets Manager, Doppler), and
+                an audit trail of who accessed what? That&apos;s in Business/Enterprise.
               </p>
             </div>
           </div>

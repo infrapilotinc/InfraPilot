@@ -590,6 +590,7 @@ func (h *Handler) deployContainerToAgent(ctx context.Context, orgID, deploymentI
 		// requests) and legacy unencrypted rows — so it safely covers every path. See
 		// secrets_crypto.go.
 		h.decryptSecretValues(containerConfig.Secrets)
+		h.decryptEnvVarValues(containerConfig.EnvVars)
 
 		// Add environment variables
 		if len(containerConfig.EnvVars) > 0 && containerConfig.SecretMethod != "docker_secrets" {

@@ -86,6 +86,92 @@ func TestNilServiceIsNoOp(t *testing.T) {
 	}
 }
 
+// Stack-deployed (and single-deploy "Env Vars" method) env vars — previously always
+// plaintext at rest, unlike the opt-in Docker Secrets method. Same round-trip contract as
+// container_config.Secrets[], applied to EnvVars via name heuristic instead of an explicit
+// per-field opt-in.
+
+func TestEnvVarSecretRoundTripThroughStorage(t *testing.T) {
+	h := testHandler(t)
+	cfg := &DeploymentContainerConfig{
+		EnvVars: map[string]string{
+			"NODE_ENV":          "production", // not secret-looking — must stay plaintext
+			"DATABASE_PASSWORD": "s3cr3t-db-pass",
+			"JWT_SECRET":        "s3cr3t-jwt",
+		},
+	}
+
+	stored, err := h.marshalContainerConfig(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if contains(stored, "s3cr3t-db-pass") || contains(stored, "s3cr3t-jwt") {
+		t.Fatal("plaintext env-var secret found in stored container_config")
+	}
+	if !contains(stored, "production") {
+		t.Fatal("non-secret env var should still be stored in plaintext")
+	}
+	// The original config is untouched (still plaintext for dispatch).
+	if cfg.EnvVars["DATABASE_PASSWORD"] != "s3cr3t-db-pass" {
+		t.Fatal("marshal mutated the input config")
+	}
+
+	var back DeploymentContainerConfig
+	if err := json.Unmarshal(stored, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	h.decryptEnvVarValues(back.EnvVars)
+	if back.EnvVars["DATABASE_PASSWORD"] != "s3cr3t-db-pass" || back.EnvVars["JWT_SECRET"] != "s3cr3t-jwt" {
+		t.Fatalf("decrypt mismatch: %+v", back.EnvVars)
+	}
+	if back.EnvVars["NODE_ENV"] != "production" {
+		t.Fatalf("non-secret value corrupted: %+v", back.EnvVars)
+	}
+}
+
+func TestEnvVarLegacyPlaintextPassesThrough(t *testing.T) {
+	h := testHandler(t)
+	envVars := map[string]string{"DB_PASSWORD": "legacy-plaintext"}
+	h.decryptEnvVarValues(envVars)
+	if envVars["DB_PASSWORD"] != "legacy-plaintext" {
+		t.Fatalf("legacy plaintext should pass through, got %q", envVars["DB_PASSWORD"])
+	}
+}
+
+func TestEnvVarEncryptIsIdempotent(t *testing.T) {
+	h := testHandler(t)
+	once := h.encryptEnvVarValues(map[string]string{"API_KEY": "v"})
+	twice := h.encryptEnvVarValues(once)
+	if once["API_KEY"] != twice["API_KEY"] {
+		t.Fatal("double-encrypt changed the value (not idempotent)")
+	}
+}
+
+func TestEnvVarNilServiceIsNoOp(t *testing.T) {
+	h := &Handler{encryptionSvc: nil, logger: zap.NewNop()}
+	out := h.encryptEnvVarValues(map[string]string{"API_KEY": "plain"})
+	if out["API_KEY"] != "plain" {
+		t.Fatal("nil encryptionSvc must be a no-op (plaintext, as today)")
+	}
+}
+
+func TestLooksLikeSecretKey(t *testing.T) {
+	cases := map[string]bool{
+		"DATABASE_PASSWORD": true,
+		"JWT_SECRET":         true,
+		"API_KEY":            true,
+		"AUTH_TOKEN":         true,
+		"NODE_ENV":           false,
+		"PORT":               false,
+		"PUBLIC_URL":         false,
+	}
+	for key, want := range cases {
+		if got := looksLikeSecretKey(key); got != want {
+			t.Errorf("looksLikeSecretKey(%q) = %v, want %v", key, got, want)
+		}
+	}
+}
+
 func contains(b []byte, s string) bool {
 	return len(b) > 0 && len(s) > 0 && (indexOf(string(b), s) >= 0)
 }
