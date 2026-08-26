@@ -1413,6 +1413,7 @@ type RedeployStackRequest struct {
 
 type redeployTarget struct {
 	DeploymentID    uuid.UUID
+	ServiceName     string
 	ImageRepository string
 	ImageTag        string
 	ContainerConfig *DeploymentContainerConfig
@@ -1654,6 +1655,7 @@ func (h *Handler) redeployManagedStack(c *gin.Context) {
 		}
 		pipelineTargets = append(pipelineTargets, redeployTarget{
 			DeploymentID:    newID,
+			ServiceName:     name,
 			ImageRepository: imageRepo,
 			ImageTag:        imageTag,
 			ContainerConfig: containerConfig,
@@ -1683,9 +1685,25 @@ func (h *Handler) redeployManagedStack(c *gin.Context) {
 func (h *Handler) runStackRedeployPipeline(ctx context.Context, orgID, stackID uuid.UUID, targets []redeployTarget, skipScanning bool) {
 	logger := h.logger.With(zap.String("stack_id", stackID.String()))
 
-	for _, t := range targets {
+	for i, t := range targets {
 		logger.Info("Redeploying stack service", zap.String("deployment_id", t.DeploymentID.String()))
 		h.runDeploymentPipeline(ctx, orgID, t.DeploymentID, t.ImageRepository, t.ImageTag, "", t.ContainerConfig, skipScanning, false)
+
+		// runDeploymentPipeline doesn't return a result — read back what it just wrote so the
+		// stack's status_message can report real progress instead of sitting frozen on
+		// "Redeploying N service(s)" for the whole (sequential, potentially multi-minute) batch.
+		var svcStatus string
+		_ = h.db.QueryRow(ctx, `SELECT status FROM deployments WHERE id = $1`, t.DeploymentID).Scan(&svcStatus)
+		outcome := svcStatus
+		if outcome == "" {
+			outcome = "unknown"
+		}
+		progressMsg := fmt.Sprintf("Redeployed %d/%d (%s: %s)", i+1, len(targets), t.ServiceName, outcome)
+		if _, err := h.db.Exec(ctx, `
+			UPDATE stacks SET status_message = $1, updated_at = NOW() WHERE id = $2
+		`, progressMsg, stackID); err != nil {
+			logger.Warn("Failed to update redeploy progress message", zap.Error(err))
+		}
 	}
 
 	// Recompute running/failed across the current head of every service in the stack.
