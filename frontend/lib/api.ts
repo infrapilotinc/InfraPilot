@@ -606,6 +606,12 @@ export interface SetupLicenseResponse {
   features: string[];
 }
 
+export interface CommunitySignupStatusResponse {
+  status: "pending" | "verified" | "not_found";
+  tier?: string;
+  max_agents?: number;
+}
+
 export interface LicenseSettingsResponse {
   valid: boolean;
   tier: string;
@@ -3550,6 +3556,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ key, setup_token: setupToken }),
     }),
+
+  communitySignup: (email: string) =>
+    fetchAPI<{ status: string }>("/setup/community-signup", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+
+  communitySignupStatus: (email: string) =>
+    fetchAPI<CommunitySignupStatusResponse>(`/setup/community-signup/status?email=${encodeURIComponent(email)}`),
 
   createInitialAdmin: (email: string, password: string, setupToken: string) =>
     fetchAPI<SetupResponse>("/setup", {

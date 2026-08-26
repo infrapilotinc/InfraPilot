@@ -65,7 +65,7 @@ type Client struct {
 func NewClient(licenseKey, dataDir, version string, logger *zap.Logger) (*Client, error) {
 	hostname, _ := os.Hostname()
 
-	instanceID, err := loadOrCreateInstanceID(dataDir)
+	instanceID, err := GetInstanceID(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("license: failed to get instance ID: %w", err)
 	}
@@ -220,8 +220,10 @@ func (c *Client) fetchFromAPI() (*ValidationResponse, error) {
 	return &result, nil
 }
 
-// loadOrCreateInstanceID reads dataDir/instance.id or creates it on first run.
-func loadOrCreateInstanceID(dataDir string) (string, error) {
+// GetInstanceID reads dataDir/instance.id or creates it on first run. Exported so
+// callers outside this package (e.g. the community-signup setup flow in api.setup_handlers)
+// can get this box's stable identity without constructing a full Client.
+func GetInstanceID(dataDir string) (string, error) {
 	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		return "", err
 	}
