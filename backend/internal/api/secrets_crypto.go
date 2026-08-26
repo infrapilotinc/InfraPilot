@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 
 	"go.uber.org/zap"
@@ -103,13 +104,29 @@ func looksLikeSecretKey(key string) bool {
 	return false
 }
 
+// credentialURLPattern matches a connection string with embedded credentials, e.g.
+// postgresql://user:pass@host:5432/db, mysql://user:pass@host/db, redis://:pass@host:6379.
+// Requires a non-empty password between ":" and "@" so a bare "scheme://user@host" (no
+// credential) doesn't match.
+var credentialURLPattern = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:@/]*:[^\s@/]+@`)
+
+// looksLikeSecretValue flags a value that embeds credentials directly, independent of the
+// env-var's name. DATABASE_URL, REDIS_URL, and similar connection-string variables carry a
+// live password in the value itself but don't match any name hint in secretKeyHints, so the
+// name-only heuristic above misses them entirely — this catches that class of leak.
+func looksLikeSecretValue(v string) bool {
+	return credentialURLPattern.MatchString(v)
+}
+
 // Stack-deployed (and single-deploy "Env Vars" method) env vars had NO encryption-at-rest at
 // all — container_config.EnvVars was always plaintext, unlike the opt-in Docker Secrets
 // method's container_config.Secrets[]. This closes that gap without introducing a vault: any
-// value whose KEY looks like a secret gets the same enc:v1: treatment, still delivered as a
-// normal environment variable (matching what a compose service actually expects to read),
-// just never stored in plaintext in between. No naming/reference/browse layer — that's the
-// deliberately bigger EE feature (doc 21's native vault + external provider integrations).
+// value whose KEY looks like a secret, OR whose VALUE embeds credentials directly (e.g. a
+// DATABASE_URL/REDIS_URL connection string — see looksLikeSecretValue), gets the same enc:v1:
+// treatment, still delivered as a normal environment variable (matching what a compose service
+// actually expects to read), just never stored in plaintext in between. No naming/reference/
+// browse layer — that's the deliberately bigger EE feature (doc 21's native vault + external
+// provider integrations).
 
 // encryptEnvVarValues returns a COPY of envVars with each secret-looking value encrypted at
 // rest. The input map is never mutated. Idempotent (an already-marked value is left as-is)
@@ -120,7 +137,7 @@ func (h *Handler) encryptEnvVarValues(envVars map[string]string) map[string]stri
 	}
 	out := make(map[string]string, len(envVars))
 	for k, v := range envVars {
-		if v == "" || strings.HasPrefix(v, secretEncPrefix) || !looksLikeSecretKey(k) {
+		if v == "" || strings.HasPrefix(v, secretEncPrefix) || (!looksLikeSecretKey(k) && !looksLikeSecretValue(v)) {
 			out[k] = v
 			continue
 		}

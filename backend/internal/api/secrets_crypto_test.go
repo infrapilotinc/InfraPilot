@@ -155,6 +155,54 @@ func TestEnvVarNilServiceIsNoOp(t *testing.T) {
 	}
 }
 
+func TestEnvVarConnectionStringEncryptedRegardlessOfKeyName(t *testing.T) {
+	h := testHandler(t)
+	cfg := &DeploymentContainerConfig{
+		EnvVars: map[string]string{
+			"DATABASE_URL": "postgresql://signalforge:s3cr3t-db-pass@postgres:5432/signalforge",
+			"REDIS_URL":    "redis://redis:6379", // no embedded credential — stays plaintext
+			"NODE_ENV":     "production",
+		},
+	}
+
+	stored, err := h.marshalContainerConfig(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if contains(stored, "s3cr3t-db-pass") {
+		t.Fatal("plaintext credential embedded in connection string found in stored container_config")
+	}
+	if !contains(stored, "redis://redis:6379") {
+		t.Fatal("connection string with no embedded credential should stay plaintext")
+	}
+
+	var back DeploymentContainerConfig
+	if err := json.Unmarshal(stored, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	h.decryptEnvVarValues(back.EnvVars)
+	if back.EnvVars["DATABASE_URL"] != "postgresql://signalforge:s3cr3t-db-pass@postgres:5432/signalforge" {
+		t.Fatalf("decrypt mismatch: %+v", back.EnvVars)
+	}
+}
+
+func TestLooksLikeSecretValue(t *testing.T) {
+	cases := map[string]bool{
+		"postgresql://user:pass@host:5432/db": true,
+		"mysql://root:hunter2@db/app":          true,
+		"redis://:onlypass@redis:6379":         true,
+		"redis://redis:6379":                   false, // no credential
+		"https://example.com/path":             false,
+		"https://user@example.com":             false, // userinfo with no password
+		"just a plain value":                   false,
+	}
+	for value, want := range cases {
+		if got := looksLikeSecretValue(value); got != want {
+			t.Errorf("looksLikeSecretValue(%q) = %v, want %v", value, got, want)
+		}
+	}
+}
+
 func TestLooksLikeSecretKey(t *testing.T) {
 	cases := map[string]bool{
 		"DATABASE_PASSWORD": true,
