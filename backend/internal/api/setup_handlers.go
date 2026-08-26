@@ -41,7 +41,7 @@ type SetupLicenseRequest struct {
 // setupTokenFile is where the setup token lives under DATA_DIR while no admin exists yet.
 const setupTokenFile = "setup_token"
 
-// ensureSetupToken closes the "whoever visits /setup first becomes admin" race: without
+// EnsureSetupToken closes the "whoever visits /setup first becomes admin" race: without
 // this, POST /api/v1/setup and POST /api/v1/setup/license have no protection beyond a
 // SELECT COUNT(*) FROM users check, so a remote attacker who reaches a freshly-installed
 // box before its owner finishes clicking through setup can claim super_admin outright.
@@ -51,7 +51,7 @@ const setupTokenFile = "setup_token"
 // read it via `docker logs`/filesystem access, something a remote attacker can't do.
 // Idempotent: later calls just read the existing file back. Fails closed on any error, the
 // caller must reject the request rather than silently skip the check.
-func ensureSetupToken(dataDir string, logger *zap.Logger) (string, error) {
+func EnsureSetupToken(dataDir string, logger *zap.Logger) (string, error) {
 	path := filepath.Join(dataDir, setupTokenFile)
 	if b, err := os.ReadFile(path); err == nil {
 		return strings.TrimSpace(string(b)), nil
@@ -139,7 +139,7 @@ func (h *Handler) setupLicense(c *gin.Context) {
 		return
 	}
 
-	expectedToken, err := ensureSetupToken(h.cfg.DataDir, h.logger)
+	expectedToken, err := EnsureSetupToken(h.cfg.DataDir, h.logger)
 	if err != nil {
 		h.logger.Error("Failed to verify setup token", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify setup token"})
@@ -235,7 +235,7 @@ func (h *Handler) createInitialAdmin(c *gin.Context) {
 		return
 	}
 
-	expectedToken, err := ensureSetupToken(h.cfg.DataDir, h.logger)
+	expectedToken, err := EnsureSetupToken(h.cfg.DataDir, h.logger)
 	if err != nil {
 		h.logger.Error("Failed to verify setup token", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify setup token"})

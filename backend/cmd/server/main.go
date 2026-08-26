@@ -74,6 +74,20 @@ func main() {
 		logger.Fatal("Failed to run migrations", zap.Error(err))
 	}
 
+	// Generate (or reload) the setup token eagerly, right here at boot, rather than
+	// lazily on the first /setup/status request. Waiting for the first request means the
+	// token — and its log line — don't exist until someone opens the dashboard in a
+	// browser, so `docker logs` right after `docker compose up` shows nothing, which reads
+	// as broken even though it isn't. Only matters pre-setup; harmless no-op afterward.
+	var userCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&userCount); err != nil {
+		logger.Warn("Failed to check user count for setup token", zap.Error(err))
+	} else if userCount == 0 {
+		if _, err := api.EnsureSetupToken(cfg.DataDir, logger); err != nil {
+			logger.Warn("Failed to generate setup token", zap.Error(err))
+		}
+	}
+
 	// ---------------------------------------------------------------
 	// License validation
 	// ---------------------------------------------------------------

@@ -12,9 +12,9 @@ func TestEnsureSetupTokenGeneratesAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	logger := zap.NewNop()
 
-	token, err := ensureSetupToken(dir, logger)
+	token, err := EnsureSetupToken(dir, logger)
 	if err != nil {
-		t.Fatalf("ensureSetupToken: %v", err)
+		t.Fatalf("EnsureSetupToken: %v", err)
 	}
 	if len(token) == 0 {
 		t.Fatal("expected a non-empty token")
@@ -33,11 +33,11 @@ func TestEnsureSetupTokenIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	logger := zap.NewNop()
 
-	first, err := ensureSetupToken(dir, logger)
+	first, err := EnsureSetupToken(dir, logger)
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	second, err := ensureSetupToken(dir, logger)
+	second, err := EnsureSetupToken(dir, logger)
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
@@ -49,11 +49,11 @@ func TestEnsureSetupTokenIsIdempotent(t *testing.T) {
 func TestEnsureSetupTokenUniquePerInstall(t *testing.T) {
 	logger := zap.NewNop()
 
-	a, err := ensureSetupToken(t.TempDir(), logger)
+	a, err := EnsureSetupToken(t.TempDir(), logger)
 	if err != nil {
 		t.Fatalf("a: %v", err)
 	}
-	b, err := ensureSetupToken(t.TempDir(), logger)
+	b, err := EnsureSetupToken(t.TempDir(), logger)
 	if err != nil {
 		t.Fatalf("b: %v", err)
 	}
@@ -66,8 +66,8 @@ func TestClearSetupTokenRemovesFile(t *testing.T) {
 	dir := t.TempDir()
 	logger := zap.NewNop()
 
-	if _, err := ensureSetupToken(dir, logger); err != nil {
-		t.Fatalf("ensureSetupToken: %v", err)
+	if _, err := EnsureSetupToken(dir, logger); err != nil {
+		t.Fatalf("EnsureSetupToken: %v", err)
 	}
 	path := filepath.Join(dir, setupTokenFile)
 	if _, err := os.Stat(path); err != nil {
