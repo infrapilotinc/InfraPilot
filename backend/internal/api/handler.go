@@ -426,6 +426,7 @@ func (h *Handler) healthCheck(c *gin.Context) {
 // This should be called after the HTTP server starts
 func (h *Handler) StartBackgroundTasks(ctx context.Context) {
 	go h.dispatchDefaultPageConfigOnStartup(ctx)
+	h.StartNginxNetworkReconciler(ctx, 60*time.Second)
 }
 
 // dispatchDefaultPageConfigOnStartup checks if a domain is configured and dispatches

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -504,5 +505,91 @@ func (h *Handler) detachNginxNetwork(c *gin.Context) {
 		"success":    true,
 		"network_id": req.NetworkID,
 	})
+}
+
+// ============ Startup / periodic self-heal ============
+//
+// nginx_network_attachments is written only as a side effect of the manual attach UI flow
+// above — it's a historical record, not something anything re-applies. Network membership
+// itself lives only in the running container's live network namespace: it is not part of
+// docker-compose.yml, so the moment InfraPilot's own container (or any agent host) gets
+// recreated — image update, `docker compose up -d`, host reboot — the real Docker network
+// connection is gone even though this table still says 'attached', and nginx starts failing
+// to resolve every container on that network. StartNginxNetworkReconciler re-applies every
+// recorded attachment on a ticker so this heals itself instead of requiring a manual re-attach.
+//
+// Safe to call repeatedly: the agent's own attach handler already no-ops if the container is
+// already on the network before touching Docker, so resending on every tick when nothing is
+// actually wrong costs one cheap round-trip, not a real reconnect.
+func (h *Handler) StartNginxNetworkReconciler(ctx context.Context, interval time.Duration) {
+	go func() {
+		h.reconcileNginxNetworkAttachments(ctx)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				h.reconcileNginxNetworkAttachments(ctx)
+			}
+		}
+	}()
+}
+
+func (h *Handler) reconcileNginxNetworkAttachments(ctx context.Context) {
+	rows, err := h.db.Query(ctx, `
+		SELECT agent_id, network_id FROM nginx_network_attachments WHERE status = 'attached'
+	`)
+	if err != nil {
+		h.logger.Error("nginx network reconcile: failed to list attachments", zap.Error(err))
+		return
+	}
+
+	type target struct {
+		agentID   uuid.UUID
+		networkID string
+	}
+	var targets []target
+	for rows.Next() {
+		var t target
+		if err := rows.Scan(&t.agentID, &t.networkID); err != nil {
+			h.logger.Warn("nginx network reconcile: failed to scan row", zap.Error(err))
+			continue
+		}
+		targets = append(targets, t)
+	}
+	rows.Close()
+
+	for _, t := range targets {
+		agentIDStr := t.agentID.String()
+		if !agentgrpc.IsAgentConnected(agentIDStr) {
+			// Not connected right now (e.g. still restarting after the recreate that broke
+			// this in the first place) — next tick will catch it once it reconnects.
+			continue
+		}
+
+		cmdPayload, _ := json.Marshal(agentgrpc.NetworkCommand{
+			Action:    agentgrpc.NetworkActionAttachNginxNetwork,
+			NetworkID: t.networkID,
+		})
+		cmd := &agentgrpc.BackendMessage{
+			RequestId: uuid.New().String(),
+			Type:      "network",
+			Command:   cmdPayload,
+		}
+
+		resp, err := agentgrpc.SendCommand(agentIDStr, cmd, 10*time.Second)
+		if err != nil {
+			h.logger.Warn("nginx network reconcile: send failed",
+				zap.String("agent_id", agentIDStr), zap.String("network_id", t.networkID), zap.Error(err))
+			continue
+		}
+		if result, err := resp.GetCommandResult(); err == nil && result != nil && !result.Success {
+			h.logger.Warn("nginx network reconcile: agent reported failure",
+				zap.String("agent_id", agentIDStr), zap.String("network_id", t.networkID), zap.String("message", result.Message))
+		}
+	}
 }
 
