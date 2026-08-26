@@ -104,8 +104,18 @@ if [ "$EMBEDDED_DB" = "true" ]; then
     if [ ! -f "$DATA_DIR/postgres/PG_VERSION" ]; then
         echo "[*] Initializing PostgreSQL database..."
 
-        # Initialize database cluster
-        su-exec postgres initdb -D "$DATA_DIR/postgres" --auth-local=trust --auth-host=md5
+        # Initialize database cluster. This script has no `set -e` (POSIX /bin/sh,
+        # deliberately tolerant elsewhere), so a failure here (disk full, bad
+        # permissions, a stale non-empty directory from a previous failed attempt)
+        # would otherwise be silently ignored — the script would keep going, claim
+        # success below, and hand supervisord a broken data directory, which is a
+        # confusing crash-loop instead of a clear error. Fail loud and fast instead.
+        if ! su-exec postgres initdb -D "$DATA_DIR/postgres" --auth-local=trust --auth-host=md5; then
+            echo "[FATAL] initdb failed — see the error above (common causes: disk full," >&2
+            echo "        a stale non-empty $DATA_DIR/postgres from a previous failed attempt," >&2
+            echo "        or a permissions issue on the mounted data volume)." >&2
+            exit 1
+        fi
 
         # Configure PostgreSQL
         echo "host all all 0.0.0.0/0 md5" >> "$DATA_DIR/postgres/pg_hba.conf"
@@ -121,7 +131,10 @@ if [ "$EMBEDDED_DB" = "true" ]; then
 
         # Start PostgreSQL temporarily
         echo "[*] Starting PostgreSQL for initial setup..."
-        su-exec postgres pg_ctl -D "$DATA_DIR/postgres" -o "-k /run/postgresql" start -w -t 60
+        if ! su-exec postgres pg_ctl -D "$DATA_DIR/postgres" -o "-k /run/postgresql" start -w -t 60; then
+            echo "[FATAL] PostgreSQL failed to start for initial setup — see the error above." >&2
+            exit 1
+        fi
 
         # Create user and database
         echo "[*] Creating database and user..."
