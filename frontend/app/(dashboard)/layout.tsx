@@ -83,6 +83,7 @@ export default function DashboardLayout({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isChecking, setIsChecking] = useState(true);
   const [showDomainWarning, setShowDomainWarning] = useState(false);
+  const [showKeylessNudge, setShowKeylessNudge] = useState(false);
 
   // Fetch license tier info to enable feature gating in navigation
   const { data: licenseInfo } = useQuery({
@@ -122,6 +123,32 @@ export default function DashboardLayout({
   const handleDismissWarning = () => {
     setShowDomainWarning(false);
     localStorage.setItem("ip_warning_dismissed", "true");
+  };
+
+  // CE is keyless by design (v3/36) — this is a soft, informational nudge (never a
+  // blocker, nothing is gated on it) that a free key exists and registers the install,
+  // same "dismiss once, persist" UX as the domain warning above.
+  useEffect(() => {
+    const checkLicenseKey = async () => {
+      const dismissed = localStorage.getItem("keyless_nudge_dismissed");
+      if (dismissed) return;
+
+      try {
+        const status = await api.getSetupStatus();
+        if (!status.license_error && !status.license_configured) {
+          setShowKeylessNudge(true);
+        }
+      } catch {
+        // Backend unreachable — say nothing, this is informational only.
+      }
+    };
+
+    checkLicenseKey();
+  }, []);
+
+  const handleDismissKeylessNudge = () => {
+    setShowKeylessNudge(false);
+    localStorage.setItem("keyless_nudge_dismissed", "true");
   };
 
   useEffect(() => {
@@ -293,6 +320,15 @@ export default function DashboardLayout({
               action={{ label: "Set Up Domain", href: "/settings" }}
               dismissible
               onDismiss={handleDismissWarning}
+            />
+          )}
+          {showKeylessNudge && (
+            <AlertBar
+              variant="info"
+              message="You're running without a license key — that's fully supported, nothing is limited. A free key registers your install and keeps you in the loop on updates."
+              action={{ label: "Get a Free Key", href: "https://infrapilot.org/signup" }}
+              dismissible
+              onDismiss={handleDismissKeylessNudge}
             />
           )}
           <div className="flex-1 overflow-auto p-4 lg:p-8">{children}</div>

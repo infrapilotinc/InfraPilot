@@ -103,6 +103,7 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   const [checkingSetup, setCheckingSetup] = useState(true);
   const [licenseWarning, setLicenseWarning] = useState<string | null>(null);
+  const [keylessNudge, setKeylessNudge] = useState(false);
 
   // Fetch SSO providers
   const { data: ssoProviders } = useQuery({
@@ -122,13 +123,17 @@ function LoginForm() {
           router.replace("/setup");
           return; // keep spinner visible while navigating
         }
-        // Users exist but license is not configured — show a warning banner so
-        // admins know they need to fix the license key in Settings → License.
-        if (!status.license_configured) {
-          setLicenseWarning(
-            status.license_error ||
-            "License key is not configured. Please contact your system administrator or visit Settings → License."
-          );
+        // CE is keyless by design (v3/36) — license_configured is EXPECTED to be false
+        // on every normal Community install, so it must never drive this banner on its
+        // own. Only license_error means something is actually wrong (an explicitly
+        // configured LICENSE_KEY that failed validation) and is worth surfacing.
+        if (status.license_error) {
+          setLicenseWarning(status.license_error);
+        } else if (!status.license_configured) {
+          // Expected keyless state — a soft, informational nudge (not an "issue") that a
+          // free key unlocks webhooks + email/chat alerts, same tone as the no-domain
+          // warning shown post-login. Never blocks sign-in.
+          setKeylessNudge(true);
         }
       } catch {
         // Backend unreachable or timed out — show login form anyway
@@ -216,6 +221,22 @@ function LoginForm() {
           >
             Get a free Community Edition key
           </a>
+        </div>
+      )}
+
+      {keylessNudge && (
+        <div className="mb-4 bg-blue-500/10 border border-blue-500/50 text-blue-700 dark:text-blue-400 px-4 py-3 rounded text-sm">
+          You're running without a license key — that's fully supported, nothing is
+          limited.{" "}
+          <a
+            href="https://infrapilot.org/signup"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:no-underline"
+          >
+            Get a free Community Edition key
+          </a>{" "}
+          to register your install and stay in the loop on updates.
         </div>
       )}
 
