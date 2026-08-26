@@ -3545,16 +3545,16 @@ export const api = {
   // Setup (first-run)
   getSetupStatus: (options?: RequestInit, timeoutMs?: number) => fetchAPI<SetupStatusResponse>("/setup/status", options ?? {}, timeoutMs),
 
-  setupLicense: (key: string) =>
+  setupLicense: (key: string, setupToken: string) =>
     fetchAPI<SetupLicenseResponse>("/setup/license", {
       method: "POST",
-      body: JSON.stringify({ key }),
+      body: JSON.stringify({ key, setup_token: setupToken }),
     }),
 
-  createInitialAdmin: (email: string, password: string) =>
+  createInitialAdmin: (email: string, password: string, setupToken: string) =>
     fetchAPI<SetupResponse>("/setup", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, setup_token: setupToken }),
     }),
 
   // Auth

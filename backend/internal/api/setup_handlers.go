@@ -1,9 +1,12 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -24,13 +27,62 @@ type SetupStatusResponse struct {
 
 // SetupRequest represents the initial admin setup request
 type SetupRequest struct {
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=8"`
+	Email      string `json:"email" binding:"required,email"`
+	Password   string `json:"password" binding:"required,min=8"`
+	SetupToken string `json:"setup_token" binding:"required"`
 }
 
 // SetupLicenseRequest represents the license key submission during setup
 type SetupLicenseRequest struct {
-	Key string `json:"key" binding:"required"`
+	Key        string `json:"key" binding:"required"`
+	SetupToken string `json:"setup_token" binding:"required"`
+}
+
+// setupTokenFile is where the setup token lives under DATA_DIR while no admin exists yet.
+const setupTokenFile = "setup_token"
+
+// ensureSetupToken closes the "whoever visits /setup first becomes admin" race: without
+// this, POST /api/v1/setup and POST /api/v1/setup/license have no protection beyond a
+// SELECT COUNT(*) FROM users check, so a remote attacker who reaches a freshly-installed
+// box before its owner finishes clicking through setup can claim super_admin outright.
+//
+// Generates a random token on first call and persists it to DATA_DIR (same file-marker
+// pattern telemetry.go already uses), logging it once at creation so the real owner can
+// read it via `docker logs`/filesystem access, something a remote attacker can't do.
+// Idempotent: later calls just read the existing file back. Fails closed on any error, the
+// caller must reject the request rather than silently skip the check.
+func ensureSetupToken(dataDir string, logger *zap.Logger) (string, error) {
+	path := filepath.Join(dataDir, setupTokenFile)
+	if b, err := os.ReadFile(path); err == nil {
+		return strings.TrimSpace(string(b)), nil
+	}
+
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(raw)
+
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(token), 0o600); err != nil {
+		return "", err
+	}
+
+	logger.Info("=================================================================")
+	logger.Info("Setup required — a setup token is needed to create the admin account")
+	logger.Info("Setup token: " + token)
+	logger.Info("=================================================================")
+
+	return token, nil
+}
+
+// clearSetupToken removes the token file once the first admin exists. It's meaningless
+// afterward, both handlers already 400 once a user exists, but leaving it around is
+// needless residue.
+func clearSetupToken(dataDir string) {
+	_ = os.Remove(filepath.Join(dataDir, setupTokenFile))
 }
 
 // getSetupStatus checks if initial setup is required (no users exist)
@@ -84,6 +136,17 @@ func (h *Handler) setupLicense(c *gin.Context) {
 	var req SetupLicenseRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	expectedToken, err := ensureSetupToken(h.cfg.DataDir, h.logger)
+	if err != nil {
+		h.logger.Error("Failed to verify setup token", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify setup token"})
+		return
+	}
+	if req.SetupToken != expectedToken {
+		c.JSON(http.StatusForbidden, gin.H{"error": "invalid setup token — check `docker logs` for the value printed at startup"})
 		return
 	}
 
@@ -172,6 +235,17 @@ func (h *Handler) createInitialAdmin(c *gin.Context) {
 		return
 	}
 
+	expectedToken, err := ensureSetupToken(h.cfg.DataDir, h.logger)
+	if err != nil {
+		h.logger.Error("Failed to verify setup token", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify setup token"})
+		return
+	}
+	if req.SetupToken != expectedToken {
+		c.JSON(http.StatusForbidden, gin.H{"error": "invalid setup token — check `docker logs` for the value printed at startup"})
+		return
+	}
+
 	// Validate password strength
 	if len(req.Password) < 8 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "password must be at least 8 characters"})
@@ -211,6 +285,8 @@ func (h *Handler) createInitialAdmin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create account"})
 		return
 	}
+
+	clearSetupToken(h.cfg.DataDir)
 
 	// Audit log for setup
 	h.db.Exec(c.Request.Context(), `

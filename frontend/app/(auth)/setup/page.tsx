@@ -13,6 +13,11 @@ export default function SetupPage() {
   // Keyless by default (doc 36 §7): 2 = admin account is the primary step; 1 = optional license activation.
   const [step, setStep] = useState<1 | 2>(2);
 
+  // Required by both steps below — closes the "whoever visits /setup first becomes
+  // admin" race. Printed to the container's logs at startup, only someone with actual
+  // access to the host (not a remote attacker) can read it.
+  const [setupToken, setSetupToken] = useState("");
+
   // Step 1: license
   const [licenseKey, setLicenseKey] = useState("");
   const [licenseError, setLicenseError] = useState("");
@@ -47,7 +52,7 @@ export default function SetupPage() {
     setLicenseError("");
     setLicenseLoading(true);
     try {
-      await api.setupLicense(licenseKey.trim());
+      await api.setupLicense(licenseKey.trim(), setupToken.trim());
       setStep(2);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Invalid license key";
@@ -72,7 +77,7 @@ export default function SetupPage() {
 
     setAdminLoading(true);
     try {
-      const result = await api.createInitialAdmin(email, password);
+      const result = await api.createInitialAdmin(email, password, setupToken.trim());
       if (result.access_token && result.refresh_token) {
         setTokens(result.access_token, result.refresh_token);
         router.push("/");
@@ -112,8 +117,32 @@ export default function SetupPage() {
             </span>
             <p className="text-gray-600 dark:text-gray-400 mt-2">
               {step === 1
-                ? "Activate a license (optional)"
+                ? "Activate a Community or Enterprise key (optional)"
                 : "Create your admin account"}
+            </p>
+          </div>
+
+          {/* Setup token — required to complete either step below, closes the remote
+              "whoever visits /setup first becomes admin" race. */}
+          <div className="mb-6">
+            <label
+              htmlFor="setupToken"
+              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+            >
+              Setup Token
+            </label>
+            <input
+              id="setupToken"
+              type="text"
+              value={setupToken}
+              onChange={(e) => setSetupToken(e.target.value)}
+              required
+              className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 font-mono text-sm"
+              placeholder="Paste the token from your container logs"
+            />
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Find it with{" "}
+              <code className="font-mono">docker logs &lt;container&gt; | grep -i &quot;setup token&quot;</code>
             </p>
           </div>
 
@@ -125,6 +154,19 @@ export default function SetupPage() {
                   {licenseError}
                 </div>
               )}
+
+              <div className="bg-blue-500/10 border border-blue-500/50 text-blue-700 dark:text-blue-400 px-4 py-3 rounded text-sm">
+                Don&apos;t have a key?{" "}
+                <a
+                  href="https://infrapilot.org/signup"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:no-underline font-medium"
+                >
+                  Get one free at infrapilot.org
+                </a>
+                {" "}(no credit card, works for Community and paid tiers alike).
+              </div>
 
               <div>
                 <label
@@ -245,7 +287,7 @@ export default function SetupPage() {
               </p>
 
               <p className="text-center text-xs text-gray-500 dark:text-gray-400">
-                Have an Enterprise license?{" "}
+                Have a Community or Enterprise key?{" "}
                 <button
                   type="button"
                   onClick={() => setStep(1)}
