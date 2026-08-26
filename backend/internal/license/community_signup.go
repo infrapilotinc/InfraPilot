@@ -8,9 +8,13 @@ import (
 	"net/url"
 )
 
+// register-ce lives in apps/cloud, deployed at app.infrapilot.sh -- a different app/
+// domain from apps/web (infrapilot.org itself, where /api/license/validate lives).
+// Pointing this at infrapilot.org was a bug: that domain never has and never will have
+// this route, so every request 404s regardless of what gets deployed to it.
 const (
-	registerCEURL       = "https://infrapilot.org/api/auth/register-ce"
-	registerCEStatusURL = "https://infrapilot.org/api/auth/register-ce/status"
+	registerCEURL       = "https://app.infrapilot.sh/api/auth/register-ce"
+	registerCEStatusURL = "https://app.infrapilot.sh/api/auth/register-ce/status"
 )
 
 // CommunitySignupStatus mirrors the JSON returned by infrapilot.org/api/auth/register-ce/status.
