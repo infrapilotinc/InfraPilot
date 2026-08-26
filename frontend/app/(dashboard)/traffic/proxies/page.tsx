@@ -640,6 +640,19 @@ export default function ProxiesPage() {
                             placeholder="http://backend:3000"
                             required
                           />
+                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            Proxying something running on this host machine, not in a container?{" "}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setNewProxy({ ...newProxy, upstream_target: "http://host.docker.internal:" })
+                              }
+                              className="underline hover:no-underline text-primary-600 dark:text-primary-400"
+                            >
+                              Use host.docker.internal
+                            </button>{" "}
+                            instead of a Docker bridge IP.
+                          </p>
                         </div>
                         <div className="flex items-end">
                           <Button
