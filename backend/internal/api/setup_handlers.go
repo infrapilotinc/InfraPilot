@@ -35,10 +35,12 @@ type SetupRequest struct {
 	SetupToken string `json:"setup_token" binding:"required"`
 }
 
-// SetupLicenseRequest represents the license key submission during setup
+// SetupLicenseRequest represents the license key submission during setup. No setup
+// token here — activating a license grants no access by itself, only createInitialAdmin
+// (the actual privilege boundary) needs to check it, so the token is asked for once,
+// right where it matters, instead of twice.
 type SetupLicenseRequest struct {
-	Key        string `json:"key" binding:"required"`
-	SetupToken string `json:"setup_token" binding:"required"`
+	Key string `json:"key" binding:"required"`
 }
 
 // setupTokenFile is where the setup token lives under DATA_DIR while no admin exists yet.
@@ -147,17 +149,6 @@ func (h *Handler) setupLicense(c *gin.Context) {
 		return
 	}
 
-	expectedToken, err := EnsureSetupToken(h.cfg.DataDir, h.logger)
-	if err != nil {
-		h.logger.Error("Failed to verify setup token", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify setup token"})
-		return
-	}
-	if req.SetupToken != expectedToken {
-		c.JSON(http.StatusForbidden, gin.H{"error": "invalid setup token — check `docker logs` for the value printed at startup"})
-		return
-	}
-
 	resp, badKey, err := h.persistLicenseKey(c.Request.Context(), req.Key)
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -182,11 +173,7 @@ func (h *Handler) setupLicense(c *gin.Context) {
 // through, so a key lands in the same place and gets the same validation either way.
 // badKey distinguishes "the key itself is bad" (400-worthy) from an infra failure (500).
 func (h *Handler) persistLicenseKey(ctx context.Context, key string) (resp *license.ValidationResponse, badKey bool, err error) {
-	client, err := license.NewClient(key, h.cfg.DataDir, h.version, h.logger)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to initialize license validation: %w", err)
-	}
-	resp, err = client.Validate()
+	resp, err = h.license.UpdateKey(key)
 	if err != nil {
 		return nil, true, fmt.Errorf("license validation failed: %w", err)
 	}
@@ -329,7 +316,7 @@ func (h *Handler) createInitialAdmin(c *gin.Context) {
 		return
 	}
 	if req.SetupToken != expectedToken {
-		c.JSON(http.StatusForbidden, gin.H{"error": "invalid setup token — check `docker logs` for the value printed at startup"})
+		c.JSON(http.StatusForbidden, gin.H{"error": "invalid setup token — run `docker exec <container> cat /data/setup_token` to find it (docker logs won't show it, the backend's own log output goes to a file, not the container's stdout)"})
 		return
 	}
 

@@ -3551,10 +3551,10 @@ export const api = {
   // Setup (first-run)
   getSetupStatus: (options?: RequestInit, timeoutMs?: number) => fetchAPI<SetupStatusResponse>("/setup/status", options ?? {}, timeoutMs),
 
-  setupLicense: (key: string, setupToken: string) =>
+  setupLicense: (key: string) =>
     fetchAPI<SetupLicenseResponse>("/setup/license", {
       method: "POST",
-      body: JSON.stringify({ key, setup_token: setupToken }),
+      body: JSON.stringify({ key }),
     }),
 
   communitySignup: (email: string) =>

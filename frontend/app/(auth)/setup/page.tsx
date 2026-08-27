@@ -71,7 +71,7 @@ export default function SetupPage() {
     setLicenseError("");
     setLicenseLoading(true);
     try {
-      await api.setupLicense(licenseKey.trim(), setupToken.trim());
+      await api.setupLicense(licenseKey.trim());
       setStep(2);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Invalid license key";
@@ -165,30 +165,6 @@ export default function SetupPage() {
               {step === 1
                 ? "Activate a free Community key to get started"
                 : "Create your admin account"}
-            </p>
-          </div>
-
-          {/* Setup token — required to complete either step below, closes the remote
-              "whoever visits /setup first becomes admin" race. */}
-          <div className="mb-6">
-            <label
-              htmlFor="setupToken"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
-            >
-              Setup Token
-            </label>
-            <input
-              id="setupToken"
-              type="text"
-              value={setupToken}
-              onChange={(e) => setSetupToken(e.target.value)}
-              required
-              className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 font-mono text-sm"
-              placeholder="Paste the token from your container logs"
-            />
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Find it with{" "}
-              <code className="font-mono">docker logs &lt;container&gt; | grep -i &quot;setup token&quot;</code>
             </p>
           </div>
 
@@ -328,6 +304,33 @@ export default function SetupPage() {
                   {adminError}
                 </div>
               )}
+
+              {/* Setup token — closes the remote "whoever visits /setup first becomes
+                  admin" race. Only needed here, since creating the admin account is the
+                  actual privilege boundary; activating a license grants no access. */}
+              <div>
+                <label
+                  htmlFor="setupToken"
+                  className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+                >
+                  Setup Token
+                </label>
+                <input
+                  id="setupToken"
+                  type="text"
+                  value={setupToken}
+                  onChange={(e) => setSetupToken(e.target.value)}
+                  required
+                  className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 font-mono text-sm"
+                  placeholder="Paste the token"
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Find it with{" "}
+                  <code className="font-mono">docker exec &lt;container&gt; cat /data/setup_token</code>
+                  {" "}(not <code className="font-mono">docker logs</code> — the backend&apos;s
+                  own output goes to a log file, not the container&apos;s stdout).
+                </p>
+              </div>
 
               <div>
                 <label
