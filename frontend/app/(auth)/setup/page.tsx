@@ -1,42 +1,56 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth";
+
+const inputClass =
+  "w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500";
+const labelClass = "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2";
+const buttonClass =
+  "w-full py-3 px-4 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-800 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors";
+const errorBoxClass =
+  "bg-red-500/10 border border-red-500/50 text-red-600 dark:text-red-400 px-4 py-3 rounded text-sm";
 
 export default function SetupPage() {
   const router = useRouter();
   const { setTokens } = useAuthStore();
 
   const [ready, setReady] = useState(false);
-  // A license is now required to complete setup (v3/36) — step 1 (license) always
-  // comes first, and there's no way to skip to step 2 without one.
-  const [step, setStep] = useState<1 | 2>(1);
+  // A license is required to complete setup (v3/36), and the setup token is required
+  // before anything else on this page can run at all -- so the wizard is now three
+  // steps, always in order: token, license, admin account.
+  const [step, setStep] = useState<1 | 2 | 3>(1);
 
-  // Required by both steps below — closes the "whoever visits /setup first becomes
-  // admin" race. Printed to the container's logs at startup, only someone with actual
-  // access to the host (not a remote attacker) can read it.
+  // Step 1: setup token — closes the "whoever visits /setup first becomes admin" race.
+  // Collected once here and carried through every later call.
   const [setupToken, setSetupToken] = useState("");
+  const [tokenInput, setTokenInput] = useState("");
+  const [tokenError, setTokenError] = useState("");
+  const [tokenLoading, setTokenLoading] = useState(false);
 
-  // Step 1: license — two ways in, toggled with licenseMode.
+  // Step 2: license — two ways in, toggled with licenseMode.
   const [licenseMode, setLicenseMode] = useState<"signup" | "paste">("signup");
 
-  // Step 1a: paste an existing key
+  // Step 2a: paste an existing key
   const [licenseKey, setLicenseKey] = useState("");
   const [licenseError, setLicenseError] = useState("");
   const [licenseLoading, setLicenseLoading] = useState(false);
 
-  // Step 1b: in-app email sign-up for a free key — no tab-switching, no copy-paste.
-  // "idle" = enter email; "pending" = check your inbox, polling in the background;
-  // "verified" = key issued and already saved, about to move on to step 2.
+  // Step 2b: in-app email sign-up for a free key — enter email, get a 6-digit code,
+  // type it in. No tab-switching, no polling.
+  const [otpStage, setOtpStage] = useState<"email" | "code">("email");
   const [signupEmail, setSignupEmail] = useState("");
-  const [signupStatus, setSignupStatus] = useState<"idle" | "pending" | "verified">("idle");
   const [signupError, setSignupError] = useState("");
   const [signupLoading, setSignupLoading] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpError, setOtpError] = useState("");
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
 
-  // Step 2: admin account
+  // Step 3: admin account
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -44,7 +58,8 @@ export default function SetupPage() {
   const [adminLoading, setAdminLoading] = useState(false);
 
   // On mount: redirect away if setup already done. A license already configured (e.g.
-  // LICENSE_KEY env var, or a prior partial setup) skips straight to admin creation.
+  // LICENSE_KEY env var, or a prior partial setup) skips straight to admin creation --
+  // that step will still ask for the token, since it's not carried across a refresh.
   useEffect(() => {
     api.getSetupStatus().then((status) => {
       if (!status.setup_required) {
@@ -52,27 +67,36 @@ export default function SetupPage() {
         return;
       }
       if (status.license_error) setLicenseError(status.license_error);
-      setStep(status.license_configured ? 2 : 1);
+      setStep(status.license_configured ? 3 : 1);
       setReady(true);
     }).catch(() => {
       setReady(true);
     });
   }, [router]);
 
-  // Stop polling if the component unmounts mid-signup.
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, []);
+  const handleTokenSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTokenError("");
+    setTokenLoading(true);
+    try {
+      await api.verifySetupToken(tokenInput.trim());
+      setSetupToken(tokenInput.trim());
+      setStep(2);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Invalid setup token";
+      setTokenError(message);
+    } finally {
+      setTokenLoading(false);
+    }
+  };
 
   const handleLicenseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLicenseError("");
     setLicenseLoading(true);
     try {
-      await api.setupLicense(licenseKey.trim());
-      setStep(2);
+      await api.setupLicense(licenseKey.trim(), setupToken);
+      setStep(3);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Invalid license key";
       setLicenseError(message);
@@ -81,30 +105,53 @@ export default function SetupPage() {
     }
   };
 
-  const handleSignupSubmit = async (e: React.FormEvent) => {
+  const sendCode = async () => {
+    await api.communitySignup(signupEmail.trim(), setupToken);
+    setOtpStage("code");
+    setOtpCode("");
+    setOtpError("");
+  };
+
+  const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
     setSignupError("");
     setSignupLoading(true);
     try {
-      await api.communitySignup(signupEmail.trim());
-      setSignupStatus("pending");
-      pollRef.current = setInterval(async () => {
-        try {
-          const result = await api.communitySignupStatus(signupEmail.trim());
-          if (result.status === "verified") {
-            if (pollRef.current) clearInterval(pollRef.current);
-            setSignupStatus("verified");
-            setTimeout(() => setStep(2), 1200);
-          }
-        } catch {
-          // Transient poll failure — keep trying, the interval will retry in 3s.
-        }
-      }, 3000);
+      await sendCode();
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to start sign-up";
+      const message = err instanceof Error ? err.message : "Failed to send code";
       setSignupError(message);
     } finally {
       setSignupLoading(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    setOtpError("");
+    setResendLoading(true);
+    try {
+      await sendCode();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to resend code";
+      setOtpError(message);
+    } finally {
+      setResendLoading(false);
+    }
+  };
+
+  const handleVerifyCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setOtpError("");
+    setOtpLoading(true);
+    try {
+      await api.communitySignupVerify(signupEmail.trim(), otpCode.trim(), setupToken);
+      setOtpVerified(true);
+      setTimeout(() => setStep(3), 1000);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Incorrect code";
+      setOtpError(message);
+    } finally {
+      setOtpLoading(false);
     }
   };
 
@@ -123,7 +170,7 @@ export default function SetupPage() {
 
     setAdminLoading(true);
     try {
-      const result = await api.createInitialAdmin(email, password, setupToken.trim());
+      const result = await api.createInitialAdmin(email, password, setupToken);
       if (result.access_token && result.refresh_token) {
         setTokens(result.access_token, result.refresh_token);
         router.push("/");
@@ -146,6 +193,12 @@ export default function SetupPage() {
     );
   }
 
+  const stepTitles: Record<1 | 2 | 3, string> = {
+    1: "Enter the setup token from your console",
+    2: "Activate a free Community key to get started",
+    3: "Create your admin account",
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-gray-950">
       <div className="w-full max-w-md">
@@ -161,15 +214,44 @@ export default function SetupPage() {
             <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 rounded-full">
               Community Edition
             </span>
-            <p className="text-gray-600 dark:text-gray-400 mt-2">
-              {step === 1
-                ? "Activate a free Community key to get started"
-                : "Create your admin account"}
-            </p>
+            <p className="text-gray-600 dark:text-gray-400 mt-2">{stepTitles[step]}</p>
           </div>
 
-          {/* Step 1: License */}
+          {/* Step 1: Setup Token */}
           {step === 1 && (
+            <form onSubmit={handleTokenSubmit} className="space-y-5">
+              {tokenError && <div className={errorBoxClass}>{tokenError}</div>}
+
+              <div>
+                <label htmlFor="setupToken" className={labelClass}>
+                  Setup Token
+                </label>
+                <input
+                  id="setupToken"
+                  type="text"
+                  value={tokenInput}
+                  onChange={(e) => setTokenInput(e.target.value)}
+                  required
+                  autoFocus
+                  className={`${inputClass} font-mono text-sm`}
+                  placeholder="Paste the token"
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Find it with{" "}
+                  <code className="font-mono">docker exec &lt;container&gt; cat /data/setup_token</code>
+                  {" "}(not <code className="font-mono">docker logs</code> — the backend&apos;s
+                  own output goes to a log file, not the container&apos;s stdout).
+                </p>
+              </div>
+
+              <button type="submit" disabled={tokenLoading} className={buttonClass}>
+                {tokenLoading ? "Checking..." : "Continue →"}
+              </button>
+            </form>
+          )}
+
+          {/* Step 2: License */}
+          {step === 2 && (
             <div className="space-y-5">
               <div className="flex gap-2">
                 <button
@@ -197,79 +279,88 @@ export default function SetupPage() {
               </div>
 
               {licenseMode === "signup" ? (
-                <form onSubmit={handleSignupSubmit} className="space-y-5">
-                  {signupError && (
-                    <div className="bg-red-500/10 border border-red-500/50 text-red-600 dark:text-red-400 px-4 py-3 rounded text-sm">
-                      {signupError}
-                    </div>
-                  )}
+                otpStage === "email" ? (
+                  <form onSubmit={handleSendCode} className="space-y-5">
+                    {signupError && <div className={errorBoxClass}>{signupError}</div>}
 
-                  {signupStatus === "idle" && (
-                    <>
-                      <div>
-                        <label
-                          htmlFor="signupEmail"
-                          className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
-                        >
-                          Email Address
-                        </label>
-                        <input
-                          id="signupEmail"
-                          type="email"
-                          value={signupEmail}
-                          onChange={(e) => setSignupEmail(e.target.value)}
-                          required
-                          autoFocus
-                          className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
-                          placeholder="you@example.com"
-                        />
-                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                          No credit card. We&apos;ll email you a free Community key and check
-                          back here automatically once it&apos;s ready.
-                        </p>
+                    <div>
+                      <label htmlFor="signupEmail" className={labelClass}>
+                        Email Address
+                      </label>
+                      <input
+                        id="signupEmail"
+                        type="email"
+                        value={signupEmail}
+                        onChange={(e) => setSignupEmail(e.target.value)}
+                        required
+                        autoFocus
+                        className={inputClass}
+                        placeholder="you@example.com"
+                      />
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        No credit card. We&apos;ll email you a 6-digit code to activate a
+                        free Community key.
+                      </p>
+                    </div>
+                    <button type="submit" disabled={signupLoading} className={buttonClass}>
+                      {signupLoading ? "Sending..." : "Send Code →"}
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleVerifyCode} className="space-y-5">
+                    {otpError && <div className={errorBoxClass}>{otpError}</div>}
+
+                    {otpVerified ? (
+                      <div className="bg-green-500/10 border border-green-500/50 text-green-700 dark:text-green-400 px-4 py-3 rounded text-sm text-center">
+                        Verified! Your Community key is active — continuing...
                       </div>
-                      <button
-                        type="submit"
-                        disabled={signupLoading}
-                        className="w-full py-3 px-4 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-800 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
-                      >
-                        {signupLoading ? "Sending..." : "Send Verification Email →"}
-                      </button>
-                    </>
-                  )}
-
-                  {signupStatus === "pending" && (
-                    <div className="text-center space-y-3 py-4">
-                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500 mx-auto" />
-                      <p className="text-sm text-gray-700 dark:text-gray-300">
-                        Check <strong>{signupEmail}</strong> and click the verification link.
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        This page will continue automatically once verified — no need to
-                        come back here.
-                      </p>
-                    </div>
-                  )}
-
-                  {signupStatus === "verified" && (
-                    <div className="bg-green-500/10 border border-green-500/50 text-green-700 dark:text-green-400 px-4 py-3 rounded text-sm text-center">
-                      Verified! Your Community key is active — continuing...
-                    </div>
-                  )}
-                </form>
+                    ) : (
+                      <>
+                        <div>
+                          <label htmlFor="otpCode" className={labelClass}>
+                            Verification Code
+                          </label>
+                          <input
+                            id="otpCode"
+                            type="text"
+                            inputMode="numeric"
+                            maxLength={6}
+                            value={otpCode}
+                            onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
+                            required
+                            autoFocus
+                            className={`${inputClass} font-mono text-center text-2xl tracking-[0.3em]`}
+                            placeholder="000000"
+                          />
+                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            Sent to <strong>{signupEmail}</strong>. Expires in 10 minutes.
+                          </p>
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={otpLoading || otpCode.length !== 6}
+                          className={buttonClass}
+                        >
+                          {otpLoading ? "Verifying..." : "Verify Code →"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleResendCode}
+                          disabled={resendLoading}
+                          className="w-full text-sm text-primary-600 dark:text-primary-400 hover:underline disabled:opacity-50"
+                        >
+                          {resendLoading ? "Resending..." : "Resend code"}
+                        </button>
+                      </>
+                    )}
+                  </form>
+                )
               ) : (
                 <form onSubmit={handleLicenseSubmit} className="space-y-5">
-                  {licenseError && (
-                    <div className="bg-red-500/10 border border-red-500/50 text-red-600 dark:text-red-400 px-4 py-3 rounded text-sm">
-                      {licenseError}
-                    </div>
-                  )}
+                  {licenseError && <div className={errorBoxClass}>{licenseError}</div>}
 
                   <div>
-                    <label
-                      htmlFor="licenseKey"
-                      className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
-                    >
+                    <label htmlFor="licenseKey" className={labelClass}>
                       License Key
                     </label>
                     <input
@@ -279,16 +370,12 @@ export default function SetupPage() {
                       onChange={(e) => setLicenseKey(e.target.value)}
                       required
                       autoFocus
-                      className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 font-mono"
+                      className={`${inputClass} font-mono`}
                       placeholder="IP-CE-XXXX-XXXX-XXXX"
                     />
                   </div>
 
-                  <button
-                    type="submit"
-                    disabled={licenseLoading}
-                    className="w-full py-3 px-4 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-800 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
-                  >
+                  <button type="submit" disabled={licenseLoading} className={buttonClass}>
                     {licenseLoading ? "Validating..." : "Activate License →"}
                   </button>
                 </form>
@@ -296,47 +383,13 @@ export default function SetupPage() {
             </div>
           )}
 
-          {/* Step 2: Admin Account */}
-          {step === 2 && (
+          {/* Step 3: Admin Account */}
+          {step === 3 && (
             <form onSubmit={handleAdminSubmit} className="space-y-5">
-              {adminError && (
-                <div className="bg-red-500/10 border border-red-500/50 text-red-600 dark:text-red-400 px-4 py-3 rounded text-sm">
-                  {adminError}
-                </div>
-              )}
-
-              {/* Setup token — closes the remote "whoever visits /setup first becomes
-                  admin" race. Only needed here, since creating the admin account is the
-                  actual privilege boundary; activating a license grants no access. */}
-              <div>
-                <label
-                  htmlFor="setupToken"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
-                >
-                  Setup Token
-                </label>
-                <input
-                  id="setupToken"
-                  type="text"
-                  value={setupToken}
-                  onChange={(e) => setSetupToken(e.target.value)}
-                  required
-                  className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 font-mono text-sm"
-                  placeholder="Paste the token"
-                />
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Find it with{" "}
-                  <code className="font-mono">docker exec &lt;container&gt; cat /data/setup_token</code>
-                  {" "}(not <code className="font-mono">docker logs</code> — the backend&apos;s
-                  own output goes to a log file, not the container&apos;s stdout).
-                </p>
-              </div>
+              {adminError && <div className={errorBoxClass}>{adminError}</div>}
 
               <div>
-                <label
-                  htmlFor="email"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
-                >
+                <label htmlFor="email" className={labelClass}>
                   Email Address
                 </label>
                 <input
@@ -346,16 +399,13 @@ export default function SetupPage() {
                   onChange={(e) => setEmail(e.target.value)}
                   required
                   autoFocus
-                  className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+                  className={inputClass}
                   placeholder="admin@example.com"
                 />
               </div>
 
               <div>
-                <label
-                  htmlFor="password"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
-                >
+                <label htmlFor="password" className={labelClass}>
                   Password
                 </label>
                 <input
@@ -365,16 +415,13 @@ export default function SetupPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   required
                   minLength={8}
-                  className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+                  className={inputClass}
                   placeholder="At least 8 characters"
                 />
               </div>
 
               <div>
-                <label
-                  htmlFor="confirmPassword"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
-                >
+                <label htmlFor="confirmPassword" className={labelClass}>
                   Confirm Password
                 </label>
                 <input
@@ -384,16 +431,12 @@ export default function SetupPage() {
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   required
                   minLength={8}
-                  className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+                  className={inputClass}
                   placeholder="Confirm your password"
                 />
               </div>
 
-              <button
-                type="submit"
-                disabled={adminLoading}
-                className="w-full py-3 px-4 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-800 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
-              >
+              <button type="submit" disabled={adminLoading} className={buttonClass}>
                 {adminLoading ? "Creating Account..." : "Create Admin Account →"}
               </button>
 

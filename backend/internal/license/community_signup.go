@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 )
 
 // register-ce lives in apps/cloud, deployed at app.infrapilot.sh -- a different app/
@@ -14,21 +13,24 @@ import (
 // this route, so every request 404s regardless of what gets deployed to it.
 const (
 	registerCEURL       = "https://app.infrapilot.sh/api/auth/register-ce"
-	registerCEStatusURL = "https://app.infrapilot.sh/api/auth/register-ce/status"
+	registerCEVerifyURL = "https://app.infrapilot.sh/api/auth/register-ce/verify"
 )
 
-// CommunitySignupStatus mirrors the JSON returned by infrapilot.org/api/auth/register-ce/status.
+// CommunitySignupStatus mirrors the JSON returned by infrapilot.org's register-ce/verify
+// endpoint. Status values: "verified" | "invalid_code" | "expired" | "too_many_attempts"
+// | "not_found".
 type CommunitySignupStatus struct {
-	Status    string `json:"status"` // "pending" | "verified" | "not_found"
+	Status    string `json:"status"`
 	Key       string `json:"key,omitempty"`
 	Tier      string `json:"tier,omitempty"`
 	MaxAgents int    `json:"max_agents,omitempty"`
 }
 
 // RequestCommunitySignup asks infrapilot.org to create (or link) an account for email
-// and send a verification email — the in-app entry point for CE's "get a free key"
-// setup step. instanceID ties the request to this specific box so a later
-// CheckCommunitySignupStatus call can't be satisfied by polling a different box's email.
+// and email a 6-digit verification code — the in-app entry point for CE's "get a free
+// key" setup step. instanceID travels with the request but is never written to the
+// account until VerifyCommunitySignupOTP succeeds (that's the actual proof of email
+// ownership; see the sibling infrapilot.org route for why).
 func RequestCommunitySignup(email, instanceID, version string) error {
 	body, err := json.Marshal(map[string]string{"email": email, "instance_id": instanceID})
 	if err != nil {
@@ -62,17 +64,20 @@ func RequestCommunitySignup(email, instanceID, version string) error {
 	return nil
 }
 
-// CheckCommunitySignupStatus polls infrapilot.org for the outcome of a prior
-// RequestCommunitySignup — "pending" until the user clicks the verification email in
-// their inbox, then "verified" with the issued key.
-func CheckCommunitySignupStatus(email, instanceID, version string) (*CommunitySignupStatus, error) {
-	statusURL := fmt.Sprintf("%s?email=%s&instance_id=%s",
-		registerCEStatusURL, url.QueryEscape(email), url.QueryEscape(instanceID))
-
-	req, err := http.NewRequest(http.MethodGet, statusURL, nil)
+// VerifyCommunitySignupOTP submits the 6-digit code the user was emailed by a prior
+// RequestCommunitySignup call. On "verified" the license is already issued and ready to
+// use — no separate polling step, unlike the older link-click flow.
+func VerifyCommunitySignupOTP(email, code, instanceID, version string) (*CommunitySignupStatus, error) {
+	body, err := json.Marshal(map[string]string{"email": email, "code": code, "instance_id": instanceID})
 	if err != nil {
 		return nil, err
 	}
+
+	req, err := http.NewRequest(http.MethodPost, registerCEVerifyURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", fmt.Sprintf("infrapilot-backend/%s", version))
 
 	httpClient := &http.Client{Timeout: httpTimeout}
@@ -84,7 +89,7 @@ func CheckCommunitySignupStatus(email, instanceID, version string) (*CommunitySi
 
 	var result CommunitySignupStatus
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode signup status response: %w", err)
+		return nil, fmt.Errorf("failed to decode signup verify response: %w", err)
 	}
 	return &result, nil
 }

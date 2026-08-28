@@ -606,10 +606,13 @@ export interface SetupLicenseResponse {
   features: string[];
 }
 
-export interface CommunitySignupStatusResponse {
-  status: "pending" | "verified" | "not_found";
-  tier?: string;
-  max_agents?: number;
+export interface CommunitySignupVerifyResponse {
+  // fetchAPI throws on any non-2xx response (using its "error" field as the message),
+  // so a resolved call here always means the code was correct — status is always
+  // "verified".
+  status: "verified";
+  tier: string;
+  max_agents: number;
 }
 
 export interface LicenseSettingsResponse {
@@ -3551,20 +3554,29 @@ export const api = {
   // Setup (first-run)
   getSetupStatus: (options?: RequestInit, timeoutMs?: number) => fetchAPI<SetupStatusResponse>("/setup/status", options ?? {}, timeoutMs),
 
-  setupLicense: (key: string) =>
+  verifySetupToken: (setupToken: string) =>
+    fetchAPI<{ valid: boolean }>("/setup/token", {
+      method: "POST",
+      body: JSON.stringify({ setup_token: setupToken }),
+    }),
+
+  setupLicense: (key: string, setupToken: string) =>
     fetchAPI<SetupLicenseResponse>("/setup/license", {
       method: "POST",
-      body: JSON.stringify({ key }),
+      body: JSON.stringify({ key, setup_token: setupToken }),
     }),
 
-  communitySignup: (email: string) =>
+  communitySignup: (email: string, setupToken: string) =>
     fetchAPI<{ status: string }>("/setup/community-signup", {
       method: "POST",
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, setup_token: setupToken }),
     }),
 
-  communitySignupStatus: (email: string) =>
-    fetchAPI<CommunitySignupStatusResponse>(`/setup/community-signup/status?email=${encodeURIComponent(email)}`),
+  communitySignupVerify: (email: string, code: string, setupToken: string) =>
+    fetchAPI<CommunitySignupVerifyResponse>("/setup/community-signup/verify", {
+      method: "POST",
+      body: JSON.stringify({ email, code, setup_token: setupToken }),
+    }),
 
   createInitialAdmin: (email: string, password: string, setupToken: string) =>
     fetchAPI<SetupResponse>("/setup", {

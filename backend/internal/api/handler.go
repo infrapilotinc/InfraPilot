@@ -63,9 +63,10 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 
 		// Setup routes (public - only work when no users exist)
 		v1.GET("/setup/status", h.getSetupStatus)
+		v1.POST("/setup/token", h.verifySetupToken)
 		v1.POST("/setup/license", h.setupLicense)
 		v1.POST("/setup/community-signup", h.communitySignup)
-		v1.GET("/setup/community-signup/status", h.communitySignupStatus)
+		v1.POST("/setup/community-signup/verify", h.communitySignupVerify)
 		v1.POST("/setup", h.createInitialAdmin)
 
 		// Auth routes (public)

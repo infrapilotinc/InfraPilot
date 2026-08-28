@@ -35,11 +35,20 @@ type SetupRequest struct {
 	SetupToken string `json:"setup_token" binding:"required"`
 }
 
-// SetupLicenseRequest represents the license key submission during setup. No setup
-// token here — activating a license grants no access by itself, only createInitialAdmin
-// (the actual privilege boundary) needs to check it, so the token is asked for once,
-// right where it matters, instead of twice.
+// SetupLicenseRequest represents the license key submission during the setup wizard's
+// license step (step 2). The wizard now collects the setup token first (step 1) and
+// carries it through every subsequent state-changing call, so it's required here too --
+// distinct from LicenseKeyRequest below, which the already-authenticated settings page
+// uses to change the key later and has no reason to know the setup token.
 type SetupLicenseRequest struct {
+	Key        string `json:"key" binding:"required"`
+	SetupToken string `json:"setup_token" binding:"required"`
+}
+
+// LicenseKeyRequest is the body for POST /settings/license -- an authenticated,
+// post-setup license change. Key only; the caller is already a logged-in super_admin,
+// so there's no setup token to check.
+type LicenseKeyRequest struct {
 	Key string `json:"key" binding:"required"`
 }
 
@@ -130,22 +139,16 @@ func (h *Handler) getSetupStatus(c *gin.Context) {
 
 // setupLicense validates and stores a license key during setup
 func (h *Handler) setupLicense(c *gin.Context) {
-	// Guard: if users exist, setup already completed
-	var count int
-	err := h.db.QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM users`).Scan(&count)
-	if err != nil {
-		h.logger.Error("Failed to count users")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check setup status"})
-		return
-	}
-	if count > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "setup already completed"})
+	if !h.setupNotComplete(c) {
 		return
 	}
 
 	var req SetupLicenseRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !h.checkSetupToken(c, req.SetupToken) {
 		return
 	}
 
@@ -169,7 +172,7 @@ func (h *Handler) setupLicense(c *gin.Context) {
 
 // persistLicenseKey validates key against infrapilot.org and, on success, saves it into
 // system_settings — the single write path both the manual "paste a key" step
-// (setupLicense) and the automatic community-signup poll (communitySignupStatus) go
+// (setupLicense) and the OTP-verified community signup (communitySignupVerify) go
 // through, so a key lands in the same place and gets the same validation either way.
 // badKey distinguishes "the key itself is bad" (400-worthy) from an infra failure (500).
 func (h *Handler) persistLicenseKey(ctx context.Context, key string) (resp *license.ValidationResponse, badKey bool, err error) {
@@ -214,19 +217,85 @@ func (h *Handler) persistLicenseKey(ctx context.Context, key string) (resp *lice
 	return resp, false, nil
 }
 
+// setupNotComplete checks the "setup already completed" guard shared by every
+// state-changing /setup/* handler. Returns false (and has already written the response)
+// if setup is done and the caller should stop.
+func (h *Handler) setupNotComplete(c *gin.Context) bool {
+	var count int
+	if err := h.db.QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+		h.logger.Error("Failed to count users")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check setup status"})
+		return false
+	}
+	if count > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "setup already completed"})
+		return false
+	}
+	return true
+}
+
+// checkSetupToken verifies the given token against EnsureSetupToken, writing the
+// appropriate error response itself on failure. Returns false if the caller should stop.
+func (h *Handler) checkSetupToken(c *gin.Context, token string) bool {
+	expectedToken, err := EnsureSetupToken(h.cfg.DataDir, h.logger)
+	if err != nil {
+		h.logger.Error("Failed to verify setup token", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify setup token"})
+		return false
+	}
+	if token != expectedToken {
+		c.JSON(http.StatusForbidden, gin.H{"error": "invalid setup token — run `docker exec <container> cat /data/setup_token` to find it"})
+		return false
+	}
+	return true
+}
+
+// SetupTokenRequest is the body for POST /setup/token -- wizard step 1, just confirms
+// the token the user read off the console before anything else on this page proceeds.
+type SetupTokenRequest struct {
+	SetupToken string `json:"setup_token" binding:"required"`
+}
+
+// verifySetupToken checks the token with no other side effects, powering step 1 of the
+// setup wizard ("Continue") so a wrong paste is caught immediately instead of only at
+// the very end.
+func (h *Handler) verifySetupToken(c *gin.Context) {
+	if !h.setupNotComplete(c) {
+		return
+	}
+	var req SetupTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !h.checkSetupToken(c, req.SetupToken) {
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"valid": true})
+}
+
 // CommunitySignupRequest is the body for POST /setup/community-signup.
 type CommunitySignupRequest struct {
-	Email string `json:"email" binding:"required,email"`
+	Email      string `json:"email" binding:"required,email"`
+	SetupToken string `json:"setup_token" binding:"required"`
 }
 
 // communitySignup kicks off the in-app "get a free key" path: asks infrapilot.org to
-// create/link an account for this email and send a verification link, so a license (now
+// create/link an account for this email and email a 6-digit code, so a license (now
 // required to complete setup, v3/36) can be obtained without leaving this page. The
-// frontend polls communitySignupStatus afterward to find out when it's issued.
+// frontend collects the code from the user and calls communitySignupVerify with it --
+// no polling.
 func (h *Handler) communitySignup(c *gin.Context) {
+	if !h.setupNotComplete(c) {
+		return
+	}
+
 	var req CommunitySignupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !h.checkSetupToken(c, req.SetupToken) {
 		return
 	}
 
@@ -242,35 +311,60 @@ func (h *Handler) communitySignup(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "pending"})
+	c.JSON(http.StatusOK, gin.H{"status": "sent"})
 }
 
-// communitySignupStatus polls infrapilot.org for the outcome of a prior communitySignup
-// call. Once verified, persists the issued key the same way a manually pasted key would
-// (persistLicenseKey) so the frontend seeing "verified" means setup can proceed
-// immediately, no separate paste step.
-func (h *Handler) communitySignupStatus(c *gin.Context) {
-	email := c.Query("email")
-	if email == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "email query parameter is required"})
+// CommunitySignupVerifyRequest is the body for POST /setup/community-signup/verify.
+type CommunitySignupVerifyRequest struct {
+	Email      string `json:"email" binding:"required,email"`
+	Code       string `json:"code" binding:"required"`
+	SetupToken string `json:"setup_token" binding:"required"`
+}
+
+// communitySignupVerify submits the 6-digit code a prior communitySignup call emailed.
+// On success the license is already issued on infrapilot.org's side; this persists it
+// the same way a manually pasted key would (persistLicenseKey) so the frontend seeing
+// "verified" means setup can proceed immediately, no separate paste step.
+func (h *Handler) communitySignupVerify(c *gin.Context) {
+	if !h.setupNotComplete(c) {
+		return
+	}
+
+	var req CommunitySignupVerifyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !h.checkSetupToken(c, req.SetupToken) {
 		return
 	}
 
 	instanceID, err := license.GetInstanceID(h.cfg.DataDir)
 	if err != nil {
-		h.logger.Error("Failed to get instance ID for community signup status", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check signup status"})
+		h.logger.Error("Failed to get instance ID for community signup verify", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify signup code"})
 		return
 	}
 
-	status, err := license.CheckCommunitySignupStatus(email, instanceID, h.version)
+	status, err := license.VerifyCommunitySignupOTP(req.Email, req.Code, instanceID, h.version)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 
 	if status.Status != "verified" || status.Key == "" {
-		c.JSON(http.StatusOK, gin.H{"status": status.Status})
+		httpStatus := http.StatusBadRequest
+		errMsg := "Incorrect code. Try again, or resend a new one."
+		switch status.Status {
+		case "not_found":
+			httpStatus = http.StatusNotFound
+			errMsg = "No pending sign-up found for this email. Resend a new code below."
+		case "expired":
+			errMsg = "That code expired. Resend a new one below."
+		case "too_many_attempts":
+			errMsg = "Too many incorrect attempts. Resend a new code below."
+		}
+		c.JSON(httpStatus, gin.H{"status": status.Status, "error": errMsg})
 		return
 	}
 
@@ -289,17 +383,7 @@ func (h *Handler) communitySignupStatus(c *gin.Context) {
 
 // createInitialAdmin creates the first admin user during setup
 func (h *Handler) createInitialAdmin(c *gin.Context) {
-	// First check if any users exist
-	var count int
-	err := h.db.QueryRow(c.Request.Context(), `SELECT COUNT(*) FROM users`).Scan(&count)
-	if err != nil {
-		h.logger.Error("Failed to count users")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check setup status"})
-		return
-	}
-
-	if count > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "setup already completed"})
+	if !h.setupNotComplete(c) {
 		return
 	}
 
@@ -308,22 +392,14 @@ func (h *Handler) createInitialAdmin(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	expectedToken, err := EnsureSetupToken(h.cfg.DataDir, h.logger)
-	if err != nil {
-		h.logger.Error("Failed to verify setup token", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify setup token"})
-		return
-	}
-	if req.SetupToken != expectedToken {
-		c.JSON(http.StatusForbidden, gin.H{"error": "invalid setup token — run `docker exec <container> cat /data/setup_token` to find it (docker logs won't show it, the backend's own log output goes to a file, not the container's stdout)"})
+	if !h.checkSetupToken(c, req.SetupToken) {
 		return
 	}
 
 	// A license (free Community or paid) is now required to complete setup (v3/36
 	// reversal — the free key had no functional teeth and wasn't driving signups, so
 	// requiring it here is the lever, not a feature gate). Activate one via setupLicense
-	// or communitySignupStatus before this succeeds.
+	// or communitySignupVerify before this succeeds.
 	if !h.licenseConfigured() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "a Community or Enterprise license is required to complete setup — activate one first"})
 		return
@@ -496,7 +572,7 @@ func (h *Handler) updateLicenseKey(c *gin.Context) {
 		return
 	}
 
-	var req SetupLicenseRequest
+	var req LicenseKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
