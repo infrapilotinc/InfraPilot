@@ -239,8 +239,6 @@ export default function SetupPage() {
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   Find it with{" "}
                   <code className="font-mono">docker exec &lt;container&gt; cat /data/setup_token</code>
-                  {" "}(not <code className="font-mono">docker logs</code> — the backend&apos;s
-                  own output goes to a log file, not the container&apos;s stdout).
                 </p>
               </div>
 
