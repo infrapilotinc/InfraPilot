@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1509,6 +1510,30 @@ func generateLocationBlock(upstream string) string {
 	return generateLocationBlockWithAuth(upstream, false, "", "", nil, false, nil)
 }
 
+// proxyPassDirective returns the nginx directive(s) to reach upstream. Normally this is
+// the variable-based form (`set $upstream "..."; proxy_pass $upstream;`) so nginx
+// resolves the hostname via its `resolver` directive at request time rather than at
+// config-load/reload time -- this lets nginx start cleanly even when the upstream is a
+// container name for a container that's currently stopped.
+//
+// host.docker.internal is a special case that breaks under that scheme: nginx's
+// `resolver` directive performs a real DNS query and never consults /etc/hosts, but
+// host.docker.internal only ever exists as a static /etc/hosts entry Docker injects --
+// it was never registered as an actual DNS record, so the resolver always returns
+// NXDOMAIN for it. A literal `proxy_pass` is resolved once via the system resolver
+// instead, which does read /etc/hosts. There's no "crashes on start if the target isn't
+// up yet" risk being traded away here either: host.docker.internal is a stable
+// host-level alias that resolves regardless of whether the actual service behind it is
+// running (unlike a container name, which only resolves while that container exists) --
+// if nothing is listening there, the existing 502 error page handles it exactly like
+// any other unreachable upstream.
+func proxyPassDirective(upstream string) string {
+	if u, err := url.Parse(upstream); err == nil && u.Hostname() == "host.docker.internal" {
+		return fmt.Sprintf("        proxy_pass %s;\n", upstream)
+	}
+	return fmt.Sprintf("        set $upstream \"%s\";\n        proxy_pass $upstream;\n", upstream)
+}
+
 func generateLocationBlockWithAuth(upstream string, basicAuthEnabled bool, basicAuthRealm, domain string, excludedPaths []string, bearerAuthEnabled bool, bearerTokens []string) string {
 	var config string
 
@@ -1521,10 +1546,7 @@ func generateLocationBlockWithAuth(upstream string, basicAuthEnabled bool, basic
 			}
 			config += fmt.Sprintf("    location %s {\n", path)
 			config += "        auth_basic off;\n"
-			// Use variable-based upstream so nginx resolves at request time,
-			// not at startup — prevents nginx crash when container is stopped.
-			config += fmt.Sprintf("        set $upstream \"%s\";\n", upstream)
-			config += "        proxy_pass $upstream;\n"
+			config += proxyPassDirective(upstream)
 			config += "        proxy_http_version 1.1;\n"
 			config += "        proxy_set_header Host $host;\n"
 			config += "        proxy_set_header X-Real-IP $remote_addr;\n"
@@ -1562,10 +1584,7 @@ func generateLocationBlockWithAuth(upstream string, basicAuthEnabled bool, basic
 		config += "        if ($bearer_token_valid = 0) { return 401; }\n\n"
 	}
 
-	// Use variable-based upstream so nginx resolves at request time,
-	// not at startup — prevents nginx crash when container is stopped.
-	config += fmt.Sprintf("        set $upstream \"%s\";\n", upstream)
-	config += "        proxy_pass $upstream;\n"
+	config += proxyPassDirective(upstream)
 	config += "        proxy_http_version 1.1;\n"
 	config += "        proxy_set_header Host $host;\n"
 	config += "        proxy_set_header X-Real-IP $remote_addr;\n"
