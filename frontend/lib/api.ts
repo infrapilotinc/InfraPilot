@@ -170,6 +170,7 @@ export interface ProxyHost {
   basic_auth_enabled: boolean;
   basic_auth_realm?: string;
   basic_auth_excluded_paths?: string[];
+  bearer_auth_enabled: boolean;
   access_log: boolean;
   error_log: boolean;
   log_format?: string;
@@ -196,6 +197,19 @@ export interface AuthUser {
   username: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface BearerToken {
+  id: string;
+  proxy_id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Only present in the response to createBearerToken -- shown once, never again.
+export interface CreateBearerTokenResponse extends BearerToken {
+  token: string;
 }
 
 export interface ConfigPreviewRequest {
@@ -3751,6 +3765,7 @@ export const api = {
       basic_auth_enabled: boolean;
       basic_auth_realm: string;
       basic_auth_excluded_paths: string[];
+      bearer_auth_enabled: boolean;
       status: string;
     }>
   ) =>
@@ -3826,6 +3841,23 @@ export const api = {
   deleteAuthUser: (agentId: string, proxyId: string, userId: string) =>
     fetchAPI<void>(
       `/agents/${agentId}/proxies/${proxyId}/auth-users/${userId}`,
+      {
+        method: "DELETE",
+      }
+    ),
+
+  listBearerTokens: (agentId: string, proxyId: string) =>
+    fetchAPI<BearerToken[]>(`/agents/${agentId}/proxies/${proxyId}/bearer-tokens`),
+
+  createBearerToken: (agentId: string, proxyId: string, data: { name: string }) =>
+    fetchAPI<CreateBearerTokenResponse>(`/agents/${agentId}/proxies/${proxyId}/bearer-tokens`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  deleteBearerToken: (agentId: string, proxyId: string, tokenId: string) =>
+    fetchAPI<void>(
+      `/agents/${agentId}/proxies/${proxyId}/bearer-tokens/${tokenId}`,
       {
         method: "DELETE",
       }

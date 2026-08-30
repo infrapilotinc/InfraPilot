@@ -129,6 +129,9 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				agents.GET("/:id/proxies/:pid/auth-users", h.listAuthUsers)
 				agents.POST("/:id/proxies/:pid/auth-users", h.RequireModifyProxy(), h.createAuthUser)
 				agents.DELETE("/:id/proxies/:pid/auth-users/:uid", h.RequireModifyProxy(), h.deleteAuthUser)
+				agents.GET("/:id/proxies/:pid/bearer-tokens", h.listBearerTokens)
+				agents.POST("/:id/proxies/:pid/bearer-tokens", h.RequireModifyProxy(), h.createBearerToken)
+				agents.DELETE("/:id/proxies/:pid/bearer-tokens/:tid", h.RequireModifyProxy(), h.deleteBearerToken)
 
 				// Nginx management
 				agents.POST("/:id/nginx/test", h.RequireModifyProxy(), h.testNginxConfig)

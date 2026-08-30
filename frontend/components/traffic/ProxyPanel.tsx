@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Globe,
   Lock,
+  KeyRound,
   Shield,
   ShieldCheck,
   Trash2,
@@ -18,6 +19,7 @@ import {
   Loader2,
   Play,
   Save,
+  Copy,
 } from "lucide-react";
 import { api, ProxyHost, SecurityHeaders, RateLimit } from "@/lib/api";
 import { useTraffic, getSSLStatus, getProxyStatus } from "@/lib/traffic-context";
@@ -66,11 +68,18 @@ export function ProxyPanel() {
     include_www: false,
     access_log: true,
     error_log: true,
+    bearer_auth_enabled: false,
   });
 
   // Auth users state
   const [authUsers, setAuthUsers] = useState<{ id: string; username: string }[]>([]);
   const [newAuthUser, setNewAuthUser] = useState({ username: "", password: "" });
+
+  // Bearer tokens state
+  const [bearerTokens, setBearerTokens] = useState<{ id: string; name: string; created_at: string }[]>([]);
+  const [newTokenName, setNewTokenName] = useState("");
+  // Holds the plaintext value right after creation -- shown once, never fetchable again.
+  const [justCreatedToken, setJustCreatedToken] = useState("");
 
   // Security headers state
   const [securityHeaders, setSecurityHeaders] = useState<SecurityHeaders>({
@@ -155,7 +164,9 @@ export function ProxyPanel() {
         include_www: proxy.include_www,
         access_log: proxy.access_log ?? true,
         error_log: proxy.error_log ?? true,
+        bearer_auth_enabled: proxy.bearer_auth_enabled ?? false,
       });
+      setJustCreatedToken("");
 
       // Load auth users
       api.listAuthUsers(selectedAgent, proxy.id)
@@ -164,6 +175,15 @@ export function ProxyPanel() {
         })
         .catch(() => {
           setAuthUsers([]);
+        });
+
+      // Load bearer tokens
+      api.listBearerTokens(selectedAgent, proxy.id)
+        .then((tokens) => {
+          setBearerTokens(tokens.map(t => ({ id: t.id, name: t.name, created_at: t.created_at })));
+        })
+        .catch(() => {
+          setBearerTokens([]);
         });
 
       // Load security headers
@@ -241,6 +261,26 @@ export function ProxyPanel() {
       api.deleteAuthUser(selectedAgent!, proxy!.id, userId),
     onSuccess: (_, userId) => {
       setAuthUsers(authUsers.filter(u => u.id !== userId));
+      invalidateProxies();
+    },
+  });
+
+  const createBearerTokenMutation = useMutation({
+    mutationFn: (data: { name: string }) =>
+      api.createBearerToken(selectedAgent!, proxy!.id, data),
+    onSuccess: (created) => {
+      setBearerTokens([...bearerTokens, { id: created.id, name: created.name, created_at: created.created_at }]);
+      setNewTokenName("");
+      setJustCreatedToken(created.token);
+      invalidateProxies();
+    },
+  });
+
+  const deleteBearerTokenMutation = useMutation({
+    mutationFn: (tokenId: string) =>
+      api.deleteBearerToken(selectedAgent!, proxy!.id, tokenId),
+    onSuccess: (_, tokenId) => {
+      setBearerTokens(bearerTokens.filter(t => t.id !== tokenId));
       invalidateProxies();
     },
   });
@@ -565,6 +605,103 @@ export function ProxyPanel() {
                 {authUsers.length === 0 && (
                   <p className="text-xs text-gray-500 text-center">
                     No authentication users configured. Add a user to enable basic auth.
+                  </p>
+                )}
+              </div>
+            </Section>
+
+            {/* Bearer Token Authentication Section */}
+            <Section
+              title="Bearer Token Authentication"
+              icon={KeyRound}
+              defaultOpen={false}
+              badge={bearerTokens.length > 0 ? <Badge color="green" size="sm">{bearerTokens.length} token{bearerTokens.length > 1 ? "s" : ""}</Badge> : undefined}
+            >
+              <div className="space-y-3">
+                <label className="flex items-center gap-2 p-3 border border-gray-200 dark:border-gray-700 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                  <input
+                    type="checkbox"
+                    checked={editProxy.bearer_auth_enabled}
+                    onChange={(e) => { setEditProxy({ ...editProxy, bearer_auth_enabled: e.target.checked }); markChanged(); }}
+                    className="w-4 h-4 rounded text-primary-600"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-900 dark:text-white">Enabled</span>
+                    <p className="text-xs text-gray-500">Require an Authorization: Bearer &lt;token&gt; header. Save Changes below to apply.</p>
+                  </div>
+                </label>
+
+                {justCreatedToken && (
+                  <div className="p-3 border border-primary-300 dark:border-primary-700 bg-primary-50 dark:bg-primary-900/20 rounded-lg space-y-2">
+                    <p className="text-xs font-medium text-primary-700 dark:text-primary-300">
+                      Copy this token now -- it won&apos;t be shown again.
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 text-xs font-mono bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 overflow-x-auto whitespace-nowrap">
+                        {justCreatedToken}
+                      </code>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(justCreatedToken)}
+                        className="p-1.5 text-gray-400 hover:text-primary-600 rounded shrink-0"
+                        title="Copy"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => setJustCreatedToken("")}
+                      className="text-xs text-gray-500 hover:text-gray-700"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+
+                {/* Existing tokens */}
+                {bearerTokens.map((token) => (
+                  <div key={token.id} className="flex items-center justify-between p-3 border border-gray-200 dark:border-gray-700 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <KeyRound className="h-4 w-4 text-gray-400" />
+                      <span className="text-sm font-medium text-gray-900 dark:text-white">{token.name}</span>
+                    </div>
+                    <button
+                      onClick={() => deleteBearerTokenMutation.mutate(token.id)}
+                      disabled={deleteBearerTokenMutation.isPending}
+                      className="p-1.5 text-gray-400 hover:text-red-500 rounded"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+
+                {/* Add token form */}
+                <div className="border border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-3">
+                  <p className="text-xs font-medium text-gray-500 mb-2">Add Token</p>
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      value={newTokenName}
+                      onChange={(e) => setNewTokenName(e.target.value)}
+                      placeholder="Name (e.g. CI pipeline)"
+                      className="w-full px-2 py-1.5 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded text-sm"
+                    />
+                    <button
+                      onClick={() => {
+                        if (newTokenName.trim()) {
+                          createBearerTokenMutation.mutate({ name: newTokenName.trim() });
+                        }
+                      }}
+                      disabled={!newTokenName.trim() || createBearerTokenMutation.isPending}
+                      className="w-full px-2 py-1.5 text-xs bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50"
+                    >
+                      {createBearerTokenMutation.isPending ? "Generating..." : "Generate Token"}
+                    </button>
+                  </div>
+                </div>
+
+                {bearerTokens.length === 0 && (
+                  <p className="text-xs text-gray-500 text-center">
+                    No tokens configured. Add one and enable Bearer Token Authentication above.
                   </p>
                 )}
               </div>
