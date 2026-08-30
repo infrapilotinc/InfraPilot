@@ -1963,21 +1963,43 @@ func (h *Handler) dispatchProxyConfigWithCert(ctx context.Context, agentID, prox
 		&headers.ContentSecurityPolicy,
 	)
 
-	// Build proxy host for config generation
-	proxy := ProxyHost{
-		Domain:         domain,
-		UpstreamTarget: upstream,
-		ForceSSL:       forceSSL,
-		HTTP2Enabled:   http2,
-		SSLEnabled:     sslEnabled,
-		SSLCertPath:    &certPath,
-		SSLKeyPath:     &keyPath,
+	// Fetch auth settings. This path (wildcard SSL / custom cert upload) used to
+	// build the ProxyHost with these left at their zero values, which silently
+	// stripped Basic Auth AND Bearer Auth from the regenerated config on ANY
+	// wildcard-cert action against an already-protected proxy -- a real auth-bypass
+	// bug, not a cosmetic gap, since a proxy could go from protected to fully public
+	// with no warning the moment someone reapplied SSL.
+	var basicAuthEnabled, bearerAuthEnabled bool
+	var basicAuthRealm string
+	var basicAuthExcludedPaths []string
+	h.db.QueryRow(ctx, `
+		SELECT COALESCE(basic_auth_enabled, false), COALESCE(basic_auth_realm, 'Restricted'),
+		       COALESCE(basic_auth_excluded_paths, '{}'), COALESCE(bearer_auth_enabled, false)
+		FROM proxy_hosts WHERE id = $1
+	`, proxyID).Scan(&basicAuthEnabled, &basicAuthRealm, &basicAuthExcludedPaths, &bearerAuthEnabled)
+
+	bearerTokens, err := h.decryptBearerTokens(ctx, proxyID)
+	if err != nil {
+		h.logger.Error("Failed to decrypt bearer tokens", zap.Error(err))
 	}
 
-	// Generate nginx config with custom cert paths. Note: like Basic Auth, this
-	// wildcard-SSL-cert path doesn't carry Bearer Auth settings through either --
-	// a pre-existing gap for Basic Auth, not a new one introduced here.
-	config := generateNginxConfig(proxy, headers, nil)
+	// Build proxy host for config generation
+	proxy := ProxyHost{
+		Domain:                 domain,
+		UpstreamTarget:         upstream,
+		ForceSSL:               forceSSL,
+		HTTP2Enabled:           http2,
+		SSLEnabled:             sslEnabled,
+		SSLCertPath:            &certPath,
+		SSLKeyPath:             &keyPath,
+		BasicAuthEnabled:       basicAuthEnabled,
+		BasicAuthRealm:         basicAuthRealm,
+		BasicAuthExcludedPaths: basicAuthExcludedPaths,
+		BearerAuthEnabled:      bearerAuthEnabled,
+	}
+
+	// Generate nginx config with custom cert paths
+	config := generateNginxConfig(proxy, headers, bearerTokens)
 
 	// Build config path
 	configPath := filepath.Join("/data/nginx/conf.d", sanitizeFilename(domain)+".conf")
