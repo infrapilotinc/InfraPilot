@@ -201,6 +201,16 @@ func (h *Handler) createProxyHost(c *gin.Context) {
 		return
 	}
 
+	// A stray leading/trailing space (e.g. from a copy-paste) becomes part of the
+	// generated nginx config, since UpstreamTarget is interpolated into a `set
+	// $upstream "..."` variable rather than a literal -- nginx can't validate that
+	// at config-load time, so it only 500s once a real request comes in, with no
+	// clue in the UI about why. Trim once here rather than at every later read site.
+	req.Domain = strings.TrimSpace(req.Domain)
+	req.UpstreamTarget = strings.TrimSpace(req.UpstreamTarget)
+	req.RedirectURL = strings.TrimSpace(req.RedirectURL)
+	req.BasicAuthRealm = strings.TrimSpace(req.BasicAuthRealm)
+
 	// Default proxy_type to "upstream" if not specified
 	if req.ProxyType == "" {
 		req.ProxyType = "upstream"
@@ -434,6 +444,25 @@ func (h *Handler) updateProxyHost(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// See createProxyHost for why these get trimmed before anything downstream
+	// (dispatch, nginx config generation) ever sees them.
+	if req.Domain != nil {
+		trimmed := strings.TrimSpace(*req.Domain)
+		req.Domain = &trimmed
+	}
+	if req.UpstreamTarget != nil {
+		trimmed := strings.TrimSpace(*req.UpstreamTarget)
+		req.UpstreamTarget = &trimmed
+	}
+	if req.RedirectURL != nil {
+		trimmed := strings.TrimSpace(*req.RedirectURL)
+		req.RedirectURL = &trimmed
+	}
+	if req.BasicAuthRealm != nil {
+		trimmed := strings.TrimSpace(*req.BasicAuthRealm)
+		req.BasicAuthRealm = &trimmed
 	}
 
 	// Get current proxy to check policies
@@ -1038,6 +1067,11 @@ func (h *Handler) previewProxyConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	// See createProxyHost for why -- this path never touches the DB, so it needs
+	// its own trim rather than inheriting one applied elsewhere.
+	req.Domain = strings.TrimSpace(req.Domain)
+	req.UpstreamTarget = strings.TrimSpace(req.UpstreamTarget)
 
 	// Set default values
 	if req.BasicAuthRealm == "" {
@@ -2151,8 +2185,15 @@ func (h *Handler) testNetworkConnectivity(c *gin.Context) {
 		Command:   cmdPayload,
 	}
 
-	// Send command and wait for response
-	resp, err := agentgrpc.SendCommand(agentIDStr, cmd, 10*time.Second)
+	// Send command and wait for response. The agent's own fallback port scan (see
+	// HandleNetworkTest) can take several seconds even after being parallelized, and
+	// this budget matches the other agent-command timeouts elsewhere in this file
+	// (30s) rather than the 10s this used to have, which was tight enough that a
+	// slightly slow first dial (e.g. against host.docker.internal, whose resolution
+	// timing differs from a container name) could blow the deadline before the
+	// agent's real answer ever arrived, producing a generic 500 instead of the
+	// actual reachable/unreachable result.
+	resp, err := agentgrpc.SendCommand(agentIDStr, cmd, 30*time.Second)
 	if err != nil {
 		h.logger.Error("Failed to test network connectivity",
 			zap.Error(err),

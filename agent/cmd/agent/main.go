@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -594,19 +595,38 @@ func (h *CommandHandler) HandleNetworkTest(ctx context.Context, containerName st
 		}, nil
 	}
 
-	// Port is not reachable - scan for available ports
+	// Port is not reachable - scan for available ports. Dialed in parallel rather
+	// than one at a time: a serial scan of up to 10 ports at a 2s timeout each can
+	// take ~20s, which risks outrunning the backend's wait budget for this whole
+	// test and returning a generic failure before this (possibly successful) result
+	// ever gets back. In parallel the whole scan takes about as long as the single
+	// slowest dial.
 	commonPorts := []int{80, 443, 3000, 3001, 4000, 5000, 8000, 8080, 8443, 9000}
-	availablePorts := []int{}
-
+	type portResult struct {
+		port      int
+		reachable bool
+	}
+	resultsCh := make(chan portResult, len(commonPorts))
+	scanned := 0
 	for _, p := range commonPorts {
 		if p == port {
 			continue // Skip the port we already tested
 		}
-		reachable, _ := h.docker.TestTCPConnection(ctx, containerIP, p, 2*time.Second)
-		if reachable {
-			availablePorts = append(availablePorts, p)
+		scanned++
+		go func(p int) {
+			reachable, _ := h.docker.TestTCPConnection(ctx, containerIP, p, 2*time.Second)
+			resultsCh <- portResult{port: p, reachable: reachable}
+		}(p)
+	}
+
+	availablePorts := []int{}
+	for i := 0; i < scanned; i++ {
+		r := <-resultsCh
+		if r.reachable {
+			availablePorts = append(availablePorts, r.port)
 		}
 	}
+	sort.Ints(availablePorts)
 
 	message := fmt.Sprintf("Port %d on %s is not accessible", port, containerName)
 	if len(availablePorts) > 0 {
