@@ -588,9 +588,16 @@ func (h *Handler) deployContainerToAgent(ctx context.Context, orgID, deploymentI
 		// Decrypt any at-rest-encrypted secret values before they're injected. This is the
 		// single dispatch funnel for secrets, and decrypt is a no-op on plaintext (fresh
 		// requests) and legacy unencrypted rows — so it safely covers every path. See
-		// secrets_crypto.go.
-		h.decryptSecretValues(containerConfig.Secrets)
-		h.decryptEnvVarValues(containerConfig.EnvVars)
+		// secrets_crypto.go. A decrypt failure here must stop the deploy: previously these
+		// just logged and continued, which handed the agent a raw enc:v1:<ciphertext>
+		// string as the literal env var value -- a real production outage caused by exactly
+		// that, since nothing downstream can tell that apart from an intended value.
+		if err := h.decryptSecretValues(containerConfig.Secrets); err != nil {
+			return nil, err
+		}
+		if err := h.decryptEnvVarValues(containerConfig.EnvVars); err != nil {
+			return nil, err
+		}
 
 		// Add environment variables
 		if len(containerConfig.EnvVars) > 0 && containerConfig.SecretMethod != "docker_secrets" {

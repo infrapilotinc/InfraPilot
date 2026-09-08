@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -51,10 +52,19 @@ func (h *Handler) encryptSecretValues(secrets []ContainerConfigSecret) []Contain
 // decryptSecretValues decrypts marked values IN PLACE. Call it on a freshly-unmarshaled config
 // right before the secrets are used to dispatch to the agent. Legacy plaintext values (no
 // marker) are left untouched.
-func (h *Handler) decryptSecretValues(secrets []ContainerConfigSecret) {
+//
+// Returns an error if any marked value fails to decrypt (most likely cause: the running
+// ENCRYPTION_KEY doesn't match the key that originally encrypted it, e.g. after a key
+// rotation or a restored database paired with a fresh install). The caller MUST treat this
+// as fatal for the deployment: leaving the failed entries untouched, like this used to,
+// silently hands the agent a raw enc:v1:<ciphertext> string that LOOKS like a value but
+// isn't one -- a worse failure mode than the deploy just failing outright, since nothing
+// downstream has any way to tell it apart from a real secret.
+func (h *Handler) decryptSecretValues(secrets []ContainerConfigSecret) error {
 	if h.encryptionSvc == nil {
-		return
+		return nil
 	}
+	var failed []string
 	for i := range secrets {
 		v := secrets[i].Value
 		if !strings.HasPrefix(v, secretEncPrefix) {
@@ -64,10 +74,15 @@ func (h *Handler) decryptSecretValues(secrets []ContainerConfigSecret) {
 		if err != nil {
 			h.logger.Error("failed to decrypt deployment secret",
 				zap.String("secret", secrets[i].Name), zap.Error(err))
+			failed = append(failed, secrets[i].Name)
 			continue
 		}
 		secrets[i].Value = pt
 	}
+	if len(failed) > 0 {
+		return fmt.Errorf("failed to decrypt secret(s): %s (check ENCRYPTION_KEY hasn't changed since these were saved)", strings.Join(failed, ", "))
+	}
+	return nil
 }
 
 // marshalContainerConfig encrypts secret values (into a copy) then JSON-marshals for storage.
@@ -156,10 +171,15 @@ func (h *Handler) encryptEnvVarValues(envVars map[string]string) map[string]stri
 // config right before env vars are dispatched to the agent — the same single funnel
 // decryptSecretValues already uses for container_config.Secrets[]. Legacy/plaintext values
 // (no marker) pass through untouched.
-func (h *Handler) decryptEnvVarValues(envVars map[string]string) {
+//
+// Returns an error if any marked value fails to decrypt -- see decryptSecretValues for why
+// the caller must treat this as fatal rather than proceeding with the raw enc:v1:<ciphertext>
+// string still sitting in the map.
+func (h *Handler) decryptEnvVarValues(envVars map[string]string) error {
 	if h.encryptionSvc == nil {
-		return
+		return nil
 	}
+	var failed []string
 	for k, v := range envVars {
 		if !strings.HasPrefix(v, secretEncPrefix) {
 			continue
@@ -167,8 +187,13 @@ func (h *Handler) decryptEnvVarValues(envVars map[string]string) {
 		pt, err := h.encryptionSvc.DecryptString(strings.TrimPrefix(v, secretEncPrefix))
 		if err != nil {
 			h.logger.Error("failed to decrypt env var", zap.String("key", k), zap.Error(err))
+			failed = append(failed, k)
 			continue
 		}
 		envVars[k] = pt
 	}
+	if len(failed) > 0 {
+		return fmt.Errorf("failed to decrypt env var(s): %s (check ENCRYPTION_KEY hasn't changed since these were saved)", strings.Join(failed, ", "))
+	}
+	return nil
 }

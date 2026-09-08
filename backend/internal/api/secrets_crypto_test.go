@@ -86,6 +86,26 @@ func TestNilServiceIsNoOp(t *testing.T) {
 	}
 }
 
+// A production outage traced to exactly this: a value encrypted under one ENCRYPTION_KEY
+// (e.g. before a key rotation, or a restored database paired with a fresh install) failed to
+// decrypt under the currently-running key, and the old silent continue-on-error behavior left
+// the raw enc:v1:<ciphertext> string in place — which then got dispatched to the container as
+// the literal, unusable env var value, with no error surfaced anywhere. Decrypt must fail
+// loudly instead.
+func TestDecryptSecretValuesReturnsErrorOnKeyMismatch(t *testing.T) {
+	h1 := testHandler(t)
+	secrets := []ContainerConfigSecret{{Name: "DB_PASSWORD", Value: "s3cr3t"}}
+	encrypted := h1.encryptSecretValues(secrets)
+
+	h2 := testHandler(t) // different random key
+	if err := h2.decryptSecretValues(encrypted); err == nil {
+		t.Fatal("expected an error decrypting under the wrong key, got nil")
+	}
+	if encrypted[0].Value == "s3cr3t" {
+		t.Fatal("decrypt should not have succeeded under the wrong key")
+	}
+}
+
 // Stack-deployed (and single-deploy "Env Vars" method) env vars — previously always
 // plaintext at rest, unlike the opt-in Docker Secrets method. Same round-trip contract as
 // container_config.Secrets[], applied to EnvVars via name heuristic instead of an explicit
@@ -152,6 +172,22 @@ func TestEnvVarNilServiceIsNoOp(t *testing.T) {
 	out := h.encryptEnvVarValues(map[string]string{"API_KEY": "plain"})
 	if out["API_KEY"] != "plain" {
 		t.Fatal("nil encryptionSvc must be a no-op (plaintext, as today)")
+	}
+}
+
+// See TestDecryptSecretValuesReturnsErrorOnKeyMismatch for why this matters: this is the
+// exact bug that caused a live production outage (DATABASE_URL and friends deployed as a raw
+// enc:v1:<ciphertext> string instead of the real value, or a decrypt failure).
+func TestDecryptEnvVarValuesReturnsErrorOnKeyMismatch(t *testing.T) {
+	h1 := testHandler(t)
+	envVars := h1.encryptEnvVarValues(map[string]string{"DATABASE_URL": "postgresql://u:p@host/db"})
+
+	h2 := testHandler(t) // different random key
+	if err := h2.decryptEnvVarValues(envVars); err == nil {
+		t.Fatal("expected an error decrypting under the wrong key, got nil")
+	}
+	if envVars["DATABASE_URL"] == "postgresql://u:p@host/db" {
+		t.Fatal("decrypt should not have succeeded under the wrong key")
 	}
 }
 
