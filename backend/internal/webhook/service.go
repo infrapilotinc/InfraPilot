@@ -193,6 +193,20 @@ func (s *Service) DeleteWebhook(ctx context.Context, webhookID uuid.UUID) error 
 // ==================== Webhook Event Processing ====================
 
 // VerifyAndParse verifies the webhook signature and parses the payload
+// requireVerifiableSecret checks that a webhook actually can have its signature verified
+// before VerifyAndParse ever gets as far as parsing/trusting the payload. Both conditions
+// used to silently skip verification instead of rejecting the request -- see VerifyAndParse
+// for why that was a real, unauthenticated-deploy-triggering vulnerability.
+func (s *Service) requireVerifiableSecret(secretEncrypted []byte) error {
+	if s.encryptionSvc == nil {
+		return fmt.Errorf("webhook signature verification is unavailable: ENCRYPTION_KEY is not configured on this server")
+	}
+	if len(secretEncrypted) == 0 {
+		return fmt.Errorf("this webhook has no verifiable secret (likely created before encryption was configured) -- delete and recreate it")
+	}
+	return nil
+}
+
 func (s *Service) VerifyAndParse(ctx context.Context, webhookID uuid.UUID, headers map[string]string, payload []byte) (*BuildMetadata, error) {
 	// Get webhook config
 	config, err := s.GetWebhook(ctx, webhookID)
@@ -204,43 +218,46 @@ func (s *Service) VerifyAndParse(ctx context.Context, webhookID uuid.UUID, heade
 		return nil, fmt.Errorf("webhook is disabled")
 	}
 
-	// Verify webhook signature
-	if len(config.SecretEncrypted) > 0 && s.encryptionSvc != nil {
-		// Decrypt the secret
-		secret, err := s.encryptionSvc.Decrypt(config.SecretEncrypted)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt webhook secret: %w", err)
-		}
-
-		// Get the appropriate verifier
-		verifier, err := GetVerifier(config.Provider)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get verifier: %w", err)
-		}
-
-		// Get the signature header based on provider
-		signature := s.getSignatureHeader(headers, config.Provider)
-
-		// Verify the signature
-		if err := verifier.Verify(payload, signature, string(secret)); err != nil {
-			s.logger.Warn("webhook signature verification failed",
-				zap.String("webhook_id", webhookID.String()),
-				zap.String("provider", config.Provider),
-				zap.Error(err),
-			)
-			return nil, fmt.Errorf("signature verification failed: %w", err)
-		}
-
-		s.logger.Debug("webhook signature verified successfully",
-			zap.String("webhook_id", webhookID.String()),
-			zap.String("provider", config.Provider),
-		)
-	} else {
-		s.logger.Warn("webhook signature verification skipped - no encrypted secret available",
-			zap.String("webhook_id", webhookID.String()),
-			zap.String("provider", config.Provider),
-		)
+	// Verify webhook signature. This endpoint is deliberately public (registered outside
+	// the auth-protected route group, see handler.go) since real CI providers can't
+	// attach a session token -- this HMAC check is the ONLY authentication boundary it
+	// has. It must be fail-closed: silently skipping verification here (the previous
+	// behavior when encryptionSvc was nil or the webhook had no encrypted secret) let
+	// anyone who discovered a webhook's URL trigger a real deployment of an
+	// attacker-chosen image with zero authentication.
+	if err := s.requireVerifiableSecret(config.SecretEncrypted); err != nil {
+		return nil, err
 	}
+
+	// Decrypt the secret
+	secret, err := s.encryptionSvc.Decrypt(config.SecretEncrypted)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt webhook secret: %w", err)
+	}
+
+	// Get the appropriate verifier
+	verifier, err := GetVerifier(config.Provider)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get verifier: %w", err)
+	}
+
+	// Get the signature header based on provider
+	signature := s.getSignatureHeader(headers, config.Provider)
+
+	// Verify the signature
+	if err := verifier.Verify(payload, signature, string(secret)); err != nil {
+		s.logger.Warn("webhook signature verification failed",
+			zap.String("webhook_id", webhookID.String()),
+			zap.String("provider", config.Provider),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("signature verification failed: %w", err)
+	}
+
+	s.logger.Debug("webhook signature verified successfully",
+		zap.String("webhook_id", webhookID.String()),
+		zap.String("provider", config.Provider),
+	)
 
 	// Parse payload
 	parser, err := GetParser(config.Provider)
