@@ -45,6 +45,7 @@ func (h *Handler) createWebhook(c *gin.Context) {
 		Provider:    config.Provider,
 		ServiceName: config.ServiceName,
 		Environment: config.Environment,
+		StackID:     config.StackID,
 		Enabled:     config.Enabled,
 		Secret:      &secret, // Only returned on creation
 		WebhookURL:  webhookURL,
@@ -80,6 +81,7 @@ func (h *Handler) listWebhooks(c *gin.Context) {
 			Provider:    config.Provider,
 			ServiceName: config.ServiceName,
 			Environment: config.Environment,
+			StackID:     config.StackID,
 			Enabled:     config.Enabled,
 			Secret:      nil, // Never return secret after creation
 			WebhookURL:  webhookURL,
@@ -113,6 +115,7 @@ func (h *Handler) getWebhook(c *gin.Context) {
 		Provider:    config.Provider,
 		ServiceName: config.ServiceName,
 		Environment: config.Environment,
+		StackID:     config.StackID,
 		Enabled:     config.Enabled,
 		Secret:      nil, // Never return secret
 		WebhookURL:  webhookURL,
@@ -266,8 +269,24 @@ func (h *Handler) listWebhookEvents(c *gin.Context) {
 // ==================== Helper Functions ====================
 
 func (h *Handler) createDeploymentFromWebhook(ctx context.Context, config *webhook.WebhookConfig, metadata *webhook.BuildMetadata) (uuid.UUID, error) {
-	// Build CreateDeploymentRequest from metadata
-	req := CreateDeploymentRequest{
+	orgID := config.OrgID
+	agentID := config.AgentID
+
+	// Extract imageDigest string (may be nil)
+	imageDigest := ""
+	if metadata.ImageDigest != nil {
+		imageDigest = *metadata.ImageDigest
+	}
+
+	if config.StackID != nil {
+		return h.createStackDeploymentFromWebhook(ctx, config, metadata, imageDigest)
+	}
+
+	// Standalone service (not part of a Stack) -- unchanged from before this feature.
+	deployment := &Deployment{
+		ID:              uuid.New(),
+		OrgID:           orgID,
+		AgentID:         agentID,
 		ServiceName:     config.ServiceName,
 		Environment:     config.Environment,
 		ImageRepository: metadata.ImageRepo,
@@ -279,27 +298,6 @@ func (h *Handler) createDeploymentFromWebhook(ctx context.Context, config *webho
 		CIProvider:      &metadata.CIProvider,
 		CIPipelineID:    &metadata.CIPipelineID,
 		CIBuildURL:      &metadata.CIBuildURL,
-	}
-
-	// Create deployment using existing logic
-	orgID := config.OrgID
-	agentID := config.AgentID
-
-	deployment := &Deployment{
-		ID:              uuid.New(),
-		OrgID:           orgID,
-		AgentID:         agentID,
-		ServiceName:     req.ServiceName,
-		Environment:     req.Environment,
-		ImageRepository: req.ImageRepository,
-		ImageTag:        req.ImageTag,
-		ImageDigest:     req.ImageDigest,
-		GitRepo:         req.GitRepo,
-		GitBranch:       req.GitBranch,
-		GitCommit:       req.GitCommit,
-		CIProvider:      req.CIProvider,
-		CIPipelineID:    req.CIPipelineID,
-		CIBuildURL:      req.CIBuildURL,
 		Status:          StatusPending,
 		PolicyDecision:  DecisionAllow, // Will be updated by pipeline
 	}
@@ -328,12 +326,6 @@ func (h *Handler) createDeploymentFromWebhook(ctx context.Context, config *webho
 		return uuid.Nil, fmt.Errorf("failed to create deployment: %w", err)
 	}
 
-	// Extract imageDigest string (may be nil)
-	imageDigest := ""
-	if metadata.ImageDigest != nil {
-		imageDigest = *metadata.ImageDigest
-	}
-
 	// Load container config from service_config if one exists for this service+env
 	var containerConfig *DeploymentContainerConfig
 	var cfgJSON []byte
@@ -353,6 +345,74 @@ func (h *Handler) createDeploymentFromWebhook(ctx context.Context, config *webho
 	go h.runDeploymentPipeline(context.Background(), orgID, deployment.ID, metadata.ImageRepo, metadata.ImageTag, imageDigest, containerConfig, false, false)
 
 	return deployment.ID, nil
+}
+
+// createStackDeploymentFromWebhook is the config.StackID != nil branch of
+// createDeploymentFromWebhook. It mirrors redeployManagedStack's own pattern (same
+// head-deployment lookup, same INSERT columns) so a webhook-triggered redeploy behaves
+// identically to a manual one: the new row correctly chains onto the service's current
+// head deployment (stack_id, service_order, replaces_deployment_id) and inherits its real
+// container_config, instead of the service_configs lookup above -- which stack-managed
+// services never populate, so a stack service redeployed via webhook used to silently get
+// zero env vars/volumes/networks. If this service has never actually been deployed under
+// this stack, this fails the webhook outright rather than silently falling back to the
+// standalone path with the wrong config.
+func (h *Handler) createStackDeploymentFromWebhook(ctx context.Context, config *webhook.WebhookConfig, metadata *webhook.BuildMetadata, imageDigest string) (uuid.UUID, error) {
+	stackID := *config.StackID
+
+	var head struct {
+		DeploymentID    uuid.UUID
+		Order           int
+		ContainerConfig []byte
+	}
+	err := h.db.QueryRow(ctx, `
+		SELECT DISTINCT ON (service_name) id, service_order, container_config
+		FROM deployments
+		WHERE stack_id = $1 AND service_name = $2
+		ORDER BY service_name, created_at DESC
+	`, stackID, config.ServiceName).Scan(&head.DeploymentID, &head.Order, &head.ContainerConfig)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("service %q has never been deployed under this webhook's stack: %w", config.ServiceName, err)
+	}
+
+	var containerConfig *DeploymentContainerConfig
+	if len(head.ContainerConfig) > 0 {
+		var cfg DeploymentContainerConfig
+		if json.Unmarshal(head.ContainerConfig, &cfg) == nil {
+			containerConfig = &cfg
+		}
+	}
+
+	deploymentID := uuid.New()
+	_, err = h.db.Exec(ctx, `
+		INSERT INTO deployments (
+			id, org_id, agent_id, service_name, environment,
+			image_repository, image_tag, image_digest,
+			git_repo, git_branch, git_commit,
+			ci_provider, ci_pipeline_id, ci_build_url,
+			status, policy_decision,
+			stack_id, service_order, container_config, replaces_deployment_id,
+			created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NOW(),NOW())
+	`,
+		deploymentID, config.OrgID, config.AgentID, config.ServiceName, config.Environment,
+		metadata.ImageRepo, metadata.ImageTag, metadata.ImageDigest,
+		metadata.GitRepo, metadata.GitBranch, metadata.GitCommit,
+		metadata.CIProvider, metadata.CIPipelineID, metadata.CIBuildURL,
+		StatusPending, DecisionAllow,
+		stackID, head.Order, head.ContainerConfig, head.DeploymentID,
+	)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("failed to create stack deployment: %w", err)
+	}
+
+	go func() {
+		bgCtx := context.Background()
+		h.runDeploymentPipeline(bgCtx, config.OrgID, deploymentID, metadata.ImageRepo, metadata.ImageTag, imageDigest, containerConfig, false, false)
+		h.recomputeStackStatus(bgCtx, stackID)
+	}()
+
+	return deploymentID, nil
 }
 
 func (h *Handler) regenerateWebhookSecret(c *gin.Context) {

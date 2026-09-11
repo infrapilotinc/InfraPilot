@@ -19,6 +19,7 @@ type WebhookConfig struct {
 	Enabled         bool       `json:"enabled"`
 	ServiceName     string     `json:"service_name"`
 	Environment     string     `json:"environment"`
+	StackID         *uuid.UUID `json:"stack_id,omitempty"` // set when this webhook targets a service that belongs to a Stack
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
@@ -56,20 +57,25 @@ type BuildMetadata struct {
 	ImageDigest  *string `json:"image_digest,omitempty"`
 }
 
-// CreateWebhookRequest is the request to create a new webhook
+// CreateWebhookRequest is the request to create a new webhook. StackID is optional -- set
+// it when this webhook should target a service that belongs to a Stack (the recommended
+// path, gets real container config and correct stack status tracking); omit it for a
+// genuinely standalone service managed outside of Stacks (the older service_configs path).
 type CreateWebhookRequest struct {
-	Name        string `json:"name" binding:"required"`
-	Provider    string `json:"provider" binding:"required,oneof=github gitlab jenkins generic"`
-	ServiceName string `json:"service_name" binding:"required"`
-	Environment string `json:"environment" binding:"required,oneof=dev staging prod"`
+	Name        string     `json:"name" binding:"required"`
+	Provider    string     `json:"provider" binding:"required,oneof=github gitlab jenkins generic"`
+	ServiceName string     `json:"service_name" binding:"required"`
+	Environment string     `json:"environment" binding:"required,oneof=dev staging prod"`
+	StackID     *uuid.UUID `json:"stack_id,omitempty"`
 }
 
 // UpdateWebhookRequest is the request to update a webhook
 type UpdateWebhookRequest struct {
-	Name        *string `json:"name"`
-	Enabled     *bool   `json:"enabled"`
-	ServiceName *string `json:"service_name"`
-	Environment *string `json:"environment"`
+	Name        *string    `json:"name"`
+	Enabled     *bool      `json:"enabled"`
+	ServiceName *string    `json:"service_name"`
+	Environment *string    `json:"environment"`
+	StackID     *uuid.UUID `json:"stack_id"`
 }
 
 // WebhookResponse includes the secret only on creation
@@ -79,6 +85,7 @@ type WebhookResponse struct {
 	Provider    string     `json:"provider"`
 	ServiceName string     `json:"service_name"`
 	Environment string     `json:"environment"`
+	StackID     *uuid.UUID `json:"stack_id,omitempty"`
 	Enabled     bool       `json:"enabled"`
 	Secret      *string    `json:"secret,omitempty"` // Only on creation
 	WebhookURL  string     `json:"webhook_url"`

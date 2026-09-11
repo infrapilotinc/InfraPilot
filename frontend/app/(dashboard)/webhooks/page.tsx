@@ -34,6 +34,7 @@ interface WebhookConfig {
   provider: "github" | "gitlab" | "jenkins" | "generic";
   service_name: string;
   environment: "dev" | "staging" | "prod";
+  stack_id?: string;
   enabled: boolean;
   webhook_url: string;
   created_at: string;
@@ -58,6 +59,10 @@ interface CreateWebhookRequest {
   provider: "github" | "gitlab" | "jenkins" | "generic";
   service_name: string;
   environment: "dev" | "staging" | "prod";
+  // Set when this webhook targets a service that belongs to a Stack -- the recommended
+  // path: the deploy it triggers gets real container config and correctly updates the
+  // stack's own status tracking. Omit for a genuinely standalone service.
+  stack_id?: string;
 }
 
 interface CreateWebhookResponse {
@@ -66,6 +71,7 @@ interface CreateWebhookResponse {
   provider: string;
   service_name: string;
   environment: string;
+  stack_id?: string;
   enabled: boolean;
   secret: string;
   webhook_url: string;
@@ -97,8 +103,12 @@ function WebhooksPageContent() {
     provider: "github",
     service_name: "",
     environment: "dev",
+    stack_id: undefined,
   });
   const [formError, setFormError] = useState<string | null>(null);
+  // "stack" (default, recommended) picks a real Stack + Service from dropdowns;
+  // "standalone" is today's free-text field, for a service managed outside of Stacks.
+  const [targetMode, setTargetMode] = useState<"stack" | "standalone">("stack");
 
   const queryClient = useQueryClient();
 
@@ -109,6 +119,39 @@ function WebhooksPageContent() {
   });
 
   const defaultAgent = agents?.[0];
+
+  // Stacks + their services, for the Stack Service picker -- same endpoints/pattern
+  // StackRedeployModal already uses for the identical purpose.
+  const { data: stacks } = useQuery({
+    queryKey: ["managed-stacks-for-webhook", defaultAgent?.id],
+    queryFn: () => api.listManagedStacks(defaultAgent!.id),
+    enabled: !!defaultAgent?.id && isCreateOpen && targetMode === "stack",
+  });
+
+  const { data: stackDetail } = useQuery({
+    queryKey: ["managed-stack-detail-for-webhook", defaultAgent?.id, formData.stack_id],
+    queryFn: () => api.getManagedStack(defaultAgent!.id, formData.stack_id!),
+    enabled: !!defaultAgent?.id && !!formData.stack_id,
+  });
+
+  const stackServiceNames = Array.from(
+    new Set((stackDetail?.deployments ?? []).map((d) => d.service_name))
+  ).sort();
+
+  const handleSelectMode = (mode: "stack" | "standalone") => {
+    setTargetMode(mode);
+    setFormData((f) => ({ ...f, stack_id: undefined, service_name: "" }));
+  };
+
+  const handleSelectStack = (stackId: string) => {
+    const stack = stacks?.find((s) => s.id === stackId);
+    setFormData((f) => ({
+      ...f,
+      stack_id: stackId,
+      service_name: "",
+      environment: (stack?.environment as CreateWebhookRequest["environment"]) ?? f.environment,
+    }));
+  };
 
   // Fetch webhooks
   const { data: webhooks, isLoading } = useQuery({
@@ -159,7 +202,16 @@ function WebhooksPageContent() {
       setFormError("Name is required");
       return;
     }
-    if (!formData.service_name.trim()) {
+    if (targetMode === "stack") {
+      if (!formData.stack_id) {
+        setFormError("Select a stack");
+        return;
+      }
+      if (!formData.service_name) {
+        setFormError("Select a service");
+        return;
+      }
+    } else if (!formData.service_name.trim()) {
       setFormError("Service name is required");
       return;
     }
@@ -172,11 +224,13 @@ function WebhooksPageContent() {
     setIsCreateOpen(false);
     setCreatedWebhook(null);
     setFormError(null);
+    setTargetMode("stack");
     setFormData({
       name: "",
       provider: "github",
       service_name: "",
       environment: "dev",
+      stack_id: undefined,
     });
   };
 
@@ -729,49 +783,120 @@ function WebhooksPageContent() {
                 </div>
               </div>
 
-              {/* Service Name */}
+              {/* Target: Stack Service (recommended) vs Standalone Service */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Service Name
+                  Deploys
                 </label>
-                <input
-                  type="text"
-                  value={formData.service_name}
-                  onChange={(e) => setFormData({ ...formData, service_name: e.target.value })}
-                  placeholder="e.g., my-app, api-server"
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  This name will be used to identify deployments
-                </p>
-              </div>
-
-              {/* Environment */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Target Environment
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(["dev", "staging", "prod"] as const).map((env) => (
-                    <button
-                      key={env}
-                      type="button"
-                      onClick={() => setFormData({ ...formData, environment: env })}
-                      className={cn(
-                        "px-4 py-2 rounded-lg border text-sm font-medium transition-colors",
-                        formData.environment === env
-                          ? env === "prod"
-                            ? "border-red-500 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300"
-                            : env === "staging"
-                            ? "border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300"
-                            : "border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300"
-                          : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300"
-                      )}
-                    >
-                      {env}
-                    </button>
-                  ))}
+                <div className="flex gap-2 mb-3">
+                  <button
+                    type="button"
+                    onClick={() => handleSelectMode("stack")}
+                    className={cn(
+                      "flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors",
+                      targetMode === "stack"
+                        ? "bg-primary-600 text-white"
+                        : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400"
+                    )}
+                  >
+                    Stack Service
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectMode("standalone")}
+                    className={cn(
+                      "flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors",
+                      targetMode === "standalone"
+                        ? "bg-primary-600 text-white"
+                        : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400"
+                    )}
+                  >
+                    Standalone Service
+                  </button>
                 </div>
+
+                {targetMode === "stack" ? (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Stack</label>
+                      <select
+                        value={formData.stack_id ?? ""}
+                        onChange={(e) => handleSelectStack(e.target.value)}
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      >
+                        <option value="">Select a stack…</option>
+                        {(stacks ?? []).map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name} ({s.environment})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Service</label>
+                      <select
+                        value={formData.service_name}
+                        onChange={(e) => setFormData({ ...formData, service_name: e.target.value })}
+                        disabled={!formData.stack_id}
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:opacity-50"
+                      >
+                        <option value="">
+                          {formData.stack_id ? "Select a service…" : "Select a stack first"}
+                        </option>
+                        {stackServiceNames.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Deploys will chain onto this service&apos;s current deployment (same
+                      config it&apos;s already running) and update the stack&apos;s status.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Service Name</label>
+                      <input
+                        type="text"
+                        value={formData.service_name}
+                        onChange={(e) => setFormData({ ...formData, service_name: e.target.value })}
+                        placeholder="e.g., my-app, api-server"
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        For a service managed outside of Stacks. This name will be used to
+                        identify deployments.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Target Environment</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {(["dev", "staging", "prod"] as const).map((env) => (
+                          <button
+                            key={env}
+                            type="button"
+                            onClick={() => setFormData({ ...formData, environment: env })}
+                            className={cn(
+                              "px-4 py-2 rounded-lg border text-sm font-medium transition-colors",
+                              formData.environment === env
+                                ? env === "prod"
+                                  ? "border-red-500 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300"
+                                  : env === "staging"
+                                  ? "border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300"
+                                  : "border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300"
+                                : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300"
+                            )}
+                          >
+                            {env}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Submit */}

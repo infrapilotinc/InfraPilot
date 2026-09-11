@@ -63,19 +63,20 @@ func (s *Service) CreateWebhook(ctx context.Context, orgID, agentID uuid.UUID, r
 		Enabled:         true,
 		ServiceName:     req.ServiceName,
 		Environment:     req.Environment,
+		StackID:         req.StackID,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}
 
 	query := `
-		INSERT INTO webhook_configs (id, org_id, agent_id, name, provider, secret_encrypted, enabled, service_name, environment, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO webhook_configs (id, org_id, agent_id, name, provider, secret_encrypted, enabled, service_name, environment, stack_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`
 
 	_, err = s.db.Exec(ctx, query,
 		config.ID, config.OrgID, config.AgentID, config.Name, config.Provider,
 		config.SecretEncrypted, config.Enabled, config.ServiceName, config.Environment,
-		config.CreatedAt, config.UpdatedAt,
+		config.StackID, config.CreatedAt, config.UpdatedAt,
 	)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to create webhook: %w", err)
@@ -87,7 +88,7 @@ func (s *Service) CreateWebhook(ctx context.Context, orgID, agentID uuid.UUID, r
 // ListWebhooks lists all webhooks for an agent
 func (s *Service) ListWebhooks(ctx context.Context, orgID, agentID uuid.UUID) ([]*WebhookConfig, error) {
 	query := `
-		SELECT id, org_id, agent_id, name, provider, enabled, service_name, environment, created_at, updated_at, last_used_at
+		SELECT id, org_id, agent_id, name, provider, enabled, service_name, environment, stack_id, created_at, updated_at, last_used_at
 		FROM webhook_configs
 		WHERE org_id = $1 AND agent_id = $2
 		ORDER BY created_at DESC
@@ -104,7 +105,7 @@ func (s *Service) ListWebhooks(ctx context.Context, orgID, agentID uuid.UUID) ([
 		var w WebhookConfig
 		err := rows.Scan(
 			&w.ID, &w.OrgID, &w.AgentID, &w.Name, &w.Provider, &w.Enabled,
-			&w.ServiceName, &w.Environment, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
+			&w.ServiceName, &w.Environment, &w.StackID, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan webhook: %w", err)
@@ -118,7 +119,7 @@ func (s *Service) ListWebhooks(ctx context.Context, orgID, agentID uuid.UUID) ([
 // GetWebhook retrieves a webhook by ID
 func (s *Service) GetWebhook(ctx context.Context, webhookID uuid.UUID) (*WebhookConfig, error) {
 	query := `
-		SELECT id, org_id, agent_id, name, provider, secret_hash, secret_encrypted, enabled, service_name, environment, created_at, updated_at, last_used_at
+		SELECT id, org_id, agent_id, name, provider, secret_hash, secret_encrypted, enabled, service_name, environment, stack_id, created_at, updated_at, last_used_at
 		FROM webhook_configs
 		WHERE id = $1
 	`
@@ -126,7 +127,7 @@ func (s *Service) GetWebhook(ctx context.Context, webhookID uuid.UUID) (*Webhook
 	var w WebhookConfig
 	err := s.db.QueryRow(ctx, query, webhookID).Scan(
 		&w.ID, &w.OrgID, &w.AgentID, &w.Name, &w.Provider, &w.SecretHash, &w.SecretEncrypted, &w.Enabled,
-		&w.ServiceName, &w.Environment, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
+		&w.ServiceName, &w.Environment, &w.StackID, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -152,6 +153,9 @@ func (s *Service) UpdateWebhook(ctx context.Context, webhookID uuid.UUID, req *U
 	}
 	if req.Environment != nil {
 		updates["environment"] = *req.Environment
+	}
+	if req.StackID != nil {
+		updates["stack_id"] = *req.StackID
 	}
 
 	if len(updates) == 0 {

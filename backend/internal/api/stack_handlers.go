@@ -1706,7 +1706,24 @@ func (h *Handler) runStackRedeployPipeline(ctx context.Context, orgID, stackID u
 		}
 	}
 
-	// Recompute running/failed across the current head of every service in the stack.
+	running, failed := h.recomputeStackStatus(ctx, stackID)
+
+	logger.Info("Stack redeploy pipeline completed",
+		zap.Int("redeployed", len(targets)),
+		zap.Int("running", running),
+		zap.Int("failed", failed),
+	)
+}
+
+// recomputeStackStatus re-tallies running/failed across the current head of every service
+// in a stack and updates stacks.status/status_message/running_count/failed_count. Shared by
+// runStackRedeployPipeline (after a manual redeploy) and the webhook receiver (after a
+// stack-linked webhook triggers one service's redeploy) so both paths keep the stack's own
+// dashboard view in sync the same way, instead of only the pipeline that happened to trigger
+// the deploy knowing to update it.
+func (h *Handler) recomputeStackStatus(ctx context.Context, stackID uuid.UUID) (running, failed int) {
+	logger := h.logger.With(zap.String("stack_id", stackID.String()))
+
 	rows, err := h.db.Query(ctx, `
 		SELECT status FROM (
 			SELECT DISTINCT ON (service_name) service_name, status
@@ -1716,12 +1733,12 @@ func (h *Handler) runStackRedeployPipeline(ctx context.Context, orgID, stackID u
 		) heads
 	`, stackID)
 	if err != nil {
-		logger.Error("Failed to recompute stack status after redeploy", zap.Error(err))
-		return
+		logger.Error("Failed to recompute stack status", zap.Error(err))
+		return 0, 0
 	}
 	defer rows.Close()
 
-	total, running, failed := 0, 0, 0
+	total := 0
 	for rows.Next() {
 		var status string
 		if err := rows.Scan(&status); err != nil {
@@ -1752,15 +1769,10 @@ func (h *Handler) runStackRedeployPipeline(ctx context.Context, orgID, stackID u
 		SET status = $1, status_message = $2, running_count = $3, failed_count = $4, deployed_at = NOW(), updated_at = NOW()
 		WHERE id = $5
 	`, finalStatus, finalMessage, running, failed, stackID); err != nil {
-		logger.Error("Failed to update final stack status after redeploy", zap.Error(err))
+		logger.Error("Failed to update stack status", zap.Error(err))
 	}
 
-	logger.Info("Stack redeploy pipeline completed",
-		zap.String("status", string(finalStatus)),
-		zap.Int("redeployed", len(targets)),
-		zap.Int("running", running),
-		zap.Int("failed", failed),
-	)
+	return running, failed
 }
 
 // ==================== Delete Stack ====================
