@@ -6,6 +6,11 @@ import (
 	"github.com/google/uuid"
 )
 
+// AllServicesTarget is the ServiceName sentinel meaning "every service in the stack"
+// instead of one specific service. Only valid when StackID is set -- a standalone webhook
+// (no stack) always names one real service_configs entry.
+const AllServicesTarget = "*"
+
 // WebhookConfig represents a configured webhook endpoint
 type WebhookConfig struct {
 	ID              uuid.UUID  `json:"id"`
