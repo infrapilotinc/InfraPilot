@@ -29,6 +29,21 @@ func (h *Handler) createWebhook(c *gin.Context) {
 		return
 	}
 
+	if req.ServiceName == webhook.AllServicesTarget && req.StackID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "targeting all services requires stack_id"})
+		return
+	}
+	if req.StackID != nil {
+		var exists bool
+		if err := h.db.QueryRow(c.Request.Context(),
+			`SELECT EXISTS(SELECT 1 FROM stacks WHERE id = $1 AND org_id = $2 AND agent_id = $3)`,
+			*req.StackID, orgID, agentID,
+		).Scan(&exists); err != nil || !exists {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "stack not found"})
+			return
+		}
+	}
+
 	config, secret, err := h.webhookService.CreateWebhook(c.Request.Context(), orgID, agentID, &req)
 	if err != nil {
 		h.logger.Error("failed to create webhook", zap.Error(err))
@@ -360,6 +375,10 @@ func (h *Handler) createDeploymentFromWebhook(ctx context.Context, config *webho
 func (h *Handler) createStackDeploymentFromWebhook(ctx context.Context, config *webhook.WebhookConfig, metadata *webhook.BuildMetadata, imageDigest string) (uuid.UUID, error) {
 	stackID := *config.StackID
 
+	if config.ServiceName == webhook.AllServicesTarget {
+		return h.redeployWholeStackFromWebhook(ctx, config)
+	}
+
 	var head struct {
 		DeploymentID    uuid.UUID
 		Order           int
@@ -413,6 +432,106 @@ func (h *Handler) createStackDeploymentFromWebhook(ctx context.Context, config *
 	}()
 
 	return deploymentID, nil
+}
+
+// redeployWholeStackFromWebhook is the config.ServiceName == webhook.AllServicesTarget branch
+// of createStackDeploymentFromWebhook: the webhook doesn't carry a build for one specific
+// service, so there's no single new image to apply across every service in the stack. Instead
+// this mirrors redeployManagedStack's own "all services, pull_latest" default -- each service
+// is redeployed on its own already-configured image (a fresh pull picks up a mutable tag),
+// exactly what clicking "Redeploy Stack" with no service selection does today, just triggered
+// by CI instead of a click.
+func (h *Handler) redeployWholeStackFromWebhook(ctx context.Context, config *webhook.WebhookConfig) (uuid.UUID, error) {
+	stackID := *config.StackID
+
+	var skipScanning bool
+	if err := h.db.QueryRow(ctx, `SELECT skip_scanning FROM stacks WHERE id = $1`, stackID).Scan(&skipScanning); err != nil {
+		return uuid.Nil, fmt.Errorf("stack not found: %w", err)
+	}
+
+	rows, err := h.db.Query(ctx, `
+		SELECT DISTINCT ON (service_name) service_name, id, service_order, image_repository, image_tag, container_config
+		FROM deployments
+		WHERE stack_id = $1
+		ORDER BY service_name, created_at DESC
+	`, stackID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("failed to load stack services: %w", err)
+	}
+
+	type svcHead struct {
+		DeploymentID    uuid.UUID
+		Order           int
+		ImageRepository string
+		ImageTag        *string
+		ContainerConfig []byte
+	}
+	heads := map[string]svcHead{}
+	for rows.Next() {
+		var name string
+		var head svcHead
+		if err := rows.Scan(&name, &head.DeploymentID, &head.Order, &head.ImageRepository, &head.ImageTag, &head.ContainerConfig); err != nil {
+			h.logger.Warn("Failed to scan stack service for webhook redeploy", zap.Error(err))
+			continue
+		}
+		heads[name] = head
+	}
+	rows.Close()
+	if len(heads) == 0 {
+		return uuid.Nil, fmt.Errorf("this stack has no deployed services")
+	}
+
+	var targets []redeployTarget
+	for name, head := range heads {
+		var containerConfig *DeploymentContainerConfig
+		if len(head.ContainerConfig) > 0 {
+			_ = json.Unmarshal(head.ContainerConfig, &containerConfig)
+		}
+		if containerConfig == nil {
+			containerConfig = &DeploymentContainerConfig{}
+		}
+		containerConfig.PullLatest = true
+		containerConfigJSON, _ := json.Marshal(containerConfig)
+
+		imageTag := ""
+		if head.ImageTag != nil {
+			imageTag = *head.ImageTag
+		}
+
+		newID := uuid.New()
+		if _, err := h.db.Exec(ctx, `
+			INSERT INTO deployments (
+				id, org_id, agent_id, service_name, environment,
+				image_repository, image_tag,
+				stack_id, service_order,
+				container_config, replaces_deployment_id,
+				status, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',NOW(),NOW())
+		`, newID, config.OrgID, config.AgentID, name, config.Environment,
+			head.ImageRepository, head.ImageTag, stackID, head.Order,
+			containerConfigJSON, head.DeploymentID,
+		); err != nil {
+			h.logger.Error("Failed to create webhook whole-stack redeploy row", zap.String("service", name), zap.Error(err))
+			continue
+		}
+		targets = append(targets, redeployTarget{
+			DeploymentID:    newID,
+			ServiceName:     name,
+			ImageRepository: head.ImageRepository,
+			ImageTag:        imageTag,
+			ContainerConfig: containerConfig,
+		})
+	}
+	if len(targets) == 0 {
+		return uuid.Nil, fmt.Errorf("failed to initiate redeploy for any service in this stack")
+	}
+
+	h.updateStackStatus(ctx, stackID, StackStatusDeploying, fmt.Sprintf("Redeploying %d service(s) via webhook", len(targets)))
+	go h.runStackRedeployPipeline(context.Background(), config.OrgID, stackID, targets, skipScanning)
+
+	// webhook_events.deployment_id is one FK slot; link it to a representative row from this
+	// batch -- the full set is still queryable by stack_id, this is just a convenience pointer.
+	return targets[0].DeploymentID, nil
 }
 
 func (h *Handler) regenerateWebhookSecret(c *gin.Context) {

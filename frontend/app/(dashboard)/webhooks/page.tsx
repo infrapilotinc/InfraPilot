@@ -92,6 +92,13 @@ const providerColors: Record<string, string> = {
   generic: "text-blue-600 dark:text-blue-400",
 };
 
+// Matches backend webhook.AllServicesTarget -- a webhook can target one specific service
+// within a stack, or every service in it (redeployed on its own current image, same as
+// clicking "Redeploy Stack" with no selection).
+const ALL_SERVICES_TARGET = "*";
+const formatServiceName = (name: string) =>
+  name === ALL_SERVICES_TARGET ? "All services" : name;
+
 function WebhooksPageContent() {
   const [selectedWebhook, setSelectedWebhook] = useState<WebhookConfig | null>(null);
   const [copiedSecret, setCopiedSecret] = useState(false);
@@ -211,7 +218,7 @@ function WebhooksPageContent() {
         setFormError("Select a service");
         return;
       }
-    } else if (!formData.service_name.trim()) {
+    } else if (!formData.service_name.trim() || formData.service_name === ALL_SERVICES_TARGET) {
       setFormError("Service name is required");
       return;
     }
@@ -289,7 +296,7 @@ function WebhooksPageContent() {
           <div className="flex items-center gap-2 mt-1">
             <GitBranch className="h-3 w-3 text-gray-400" />
             <span className="text-xs text-gray-500 dark:text-gray-400">
-              {row.service_name}
+              {formatServiceName(row.service_name)}
             </span>
           </div>
         </div>
@@ -452,7 +459,7 @@ function WebhooksPageContent() {
                     <div className="flex justify-between">
                       <span className="text-sm text-gray-500 dark:text-gray-400">Service</span>
                       <span className="text-sm text-gray-900 dark:text-white font-medium">
-                        {selectedWebhook.service_name}
+                        {formatServiceName(selectedWebhook.service_name)}
                       </span>
                     </div>
                     <div className="flex justify-between">
@@ -710,7 +717,7 @@ function WebhooksPageContent() {
                   </div>
                   <div className="flex justify-between py-2 border-b border-gray-100 dark:border-gray-800">
                     <span className="text-gray-500 dark:text-gray-400">Service</span>
-                    <span className="text-gray-900 dark:text-white">{createdWebhook.service_name}</span>
+                    <span className="text-gray-900 dark:text-white">{formatServiceName(createdWebhook.service_name)}</span>
                   </div>
                   <div className="flex justify-between py-2">
                     <span className="text-gray-500 dark:text-gray-400">Environment</span>
@@ -843,6 +850,9 @@ function WebhooksPageContent() {
                         <option value="">
                           {formData.stack_id ? "Select a service…" : "Select a stack first"}
                         </option>
+                        {formData.stack_id && (
+                          <option value={ALL_SERVICES_TARGET}>All services (whole stack)</option>
+                        )}
                         {stackServiceNames.map((name) => (
                           <option key={name} value={name}>
                             {name}
@@ -851,8 +861,9 @@ function WebhooksPageContent() {
                       </select>
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Deploys will chain onto this service&apos;s current deployment (same
-                      config it&apos;s already running) and update the stack&apos;s status.
+                      {formData.service_name === ALL_SERVICES_TARGET
+                        ? "Every service in the stack redeploys on its own current image (fresh pull) and the stack's status updates when they're done."
+                        : "Deploys will chain onto this service's current deployment (same config it's already running) and update the stack's status."}
                     </p>
                   </div>
                 ) : (
