@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { FeatureGate } from "@/components/ui/FeatureGate";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Breadcrumb } from "@/components/ui/Breadcrumb";
 import { StatCard, MetricsGrid } from "@/components/ui/StatCard";
@@ -938,13 +937,11 @@ function WebhooksPageContent() {
   );
 }
 
-// Webhooks is a "connected" feature (doc 35): it requires a free account key.
-// Anonymous/keyless CE lacks the "webhooks" flag, so FeatureGate shows the
-// "get a free CE key" prompt; a free key unlocks it.
+// No FeatureGate here: CE already gates entry at setup (a Community Edition key is required
+// to use the instance at all), so a second per-page gate on top of that is redundant --
+// and it periodically re-locked already-unlocked pages when the license-tier-info fetch
+// flapped, since the gate re-checks it on every remount/refocus rather than trusting a key
+// that's already known to be present.
 export default function WebhooksPage() {
-  return (
-    <FeatureGate feature="webhooks" featureLabel="Webhooks">
-      <WebhooksPageContent />
-    </FeatureGate>
-  );
+  return <WebhooksPageContent />;
 }

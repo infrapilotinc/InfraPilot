@@ -2,7 +2,6 @@
 
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { FeatureGate } from "@/components/ui/FeatureGate";
 import {
   Layers,
   AlertTriangle,
@@ -341,12 +340,13 @@ function DockerStacksPageContent() {
   );
 }
 
+// No FeatureGate here: CE already gates entry at setup (a Community Edition key is required
+// to use the instance at all), so a second per-page gate on top of that is redundant --
+// and it periodically re-locked already-unlocked pages when the license-tier-info fetch
+// flapped, since the gate re-checks it on every remount/refocus rather than trusting a key
+// that's already known to be present.
 export default function DockerStacksPage() {
-  return (
-    <FeatureGate feature="stack_management" tier="professional" featureLabel="Docker Stacks">
-      <DockerStacksPageContent />
-    </FeatureGate>
-  );
+  return <DockerStacksPageContent />;
 }
 
 // Stack Card Component
