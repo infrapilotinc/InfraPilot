@@ -59,6 +59,12 @@ export function StackRedeployModal({
 
   // Re-seed local state whenever the modal opens for a (possibly different) stack, and once
   // the detail fetch lands (pre-check the saved default selection, or everything if unset).
+  // Deliberately keyed on detail?.id, not detail itself: React Query's default
+  // refetchOnWindowFocus means `detail` gets a new object reference (background refetch)
+  // while the modal stays open and the user is mid-edit -- e.g. tabbing away to copy a real
+  // secret value, then back to paste it in. Keying on the whole object silently reset
+  // updateConfig/composeYaml/variablesText back to the server's stored values on that
+  // refetch, discarding the edit before it was ever submitted.
   useEffect(() => {
     if (!isOpen) return;
     setPullLatest(true);
@@ -68,7 +74,8 @@ export function StackRedeployModal({
     setComposeYaml(detail?.compose_yaml ?? "");
     const vars = detail?.variables ?? {};
     setVariablesText(Object.entries(vars).map(([k, v]) => `${k}=${v}`).join("\n"));
-  }, [isOpen, detail]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, detail?.id]);
 
   useEffect(() => {
     if (!isOpen || serviceNames.length === 0) return;
