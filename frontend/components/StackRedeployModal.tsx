@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Dialog } from "@headlessui/react";
 import {
@@ -39,10 +39,14 @@ export function StackRedeployModal({
   isLoading = false,
   errorMessage,
 }: StackRedeployModalProps) {
-  const { data: detail } = useQuery({
+  const { data: detail, isFetching } = useQuery({
     queryKey: ["managed-stack-detail", agentId, stack?.id],
     queryFn: () => api.getManagedStack(agentId!, stack!.id),
     enabled: isOpen && !!agentId && !!stack?.id,
+    // Always hit the network on open rather than trusting a cached snapshot: a redeploy done
+    // moments ago (from this modal or elsewhere) may have changed compose_yaml/variables, and
+    // React Query would otherwise happily serve the pre-redeploy cache first.
+    refetchOnMount: "always",
   });
 
   const serviceNames = Array.from(
@@ -57,32 +61,31 @@ export function StackRedeployModal({
   const [composeYaml, setComposeYaml] = useState("");
   const [variablesText, setVariablesText] = useState("");
 
-  // Re-seed local state whenever the modal opens for a (possibly different) stack, and once
-  // the detail fetch lands (pre-check the saved default selection, or everything if unset).
-  // Deliberately keyed on detail?.id, not detail itself: React Query's default
-  // refetchOnWindowFocus means `detail` gets a new object reference (background refetch)
-  // while the modal stays open and the user is mid-edit -- e.g. tabbing away to copy a real
-  // secret value, then back to paste it in. Keying on the whole object silently reset
-  // updateConfig/composeYaml/variablesText back to the server's stored values on that
-  // refetch, discarding the edit before it was ever submitted.
+  // Re-seed local state exactly once per time the modal opens, from the first fetch that
+  // actually lands after opening -- never from a stale cached `detail`, and never again from
+  // a later background refetch while the user is mid-edit (e.g. tabbing away to copy a real
+  // secret value, then back to paste it in triggers React Query's refetchOnWindowFocus).
+  // seededRef gates both: it resets on close so the next open re-seeds once, and blocks any
+  // re-seed after that until the modal closes again.
+  const seededRef = useRef(false);
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      seededRef.current = false;
+      return;
+    }
+    if (seededRef.current || isFetching || !detail) return;
+    seededRef.current = true;
     setPullLatest(true);
     setSkipScanning(false);
     setSaveSelection(false);
     setUpdateConfig(false);
-    setComposeYaml(detail?.compose_yaml ?? "");
-    const vars = detail?.variables ?? {};
+    setComposeYaml(detail.compose_yaml ?? "");
+    const vars = detail.variables ?? {};
     setVariablesText(Object.entries(vars).map(([k, v]) => `${k}=${v}`).join("\n"));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, detail?.id]);
-
-  useEffect(() => {
-    if (!isOpen || serviceNames.length === 0) return;
-    const saved = detail?.redeploy_services;
-    setSelected(new Set(saved && saved.length > 0 ? saved : serviceNames));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, detail?.id]);
+    const saved = detail.redeploy_services;
+    const names = Array.from(new Set((detail.deployments ?? []).map((d) => d.service_name))).sort();
+    setSelected(new Set(saved && saved.length > 0 ? saved : names));
+  }, [isOpen, isFetching, detail]);
 
   if (!stack) return null;
 
