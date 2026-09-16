@@ -118,15 +118,22 @@ func (s *Service) ListWebhooks(ctx context.Context, orgID, agentID uuid.UUID) ([
 
 // GetWebhook retrieves a webhook by ID
 func (s *Service) GetWebhook(ctx context.Context, webhookID uuid.UUID) (*WebhookConfig, error) {
+	// secret_hash is deliberately not selected: it's been nullable since encrypted secrets
+	// (secret_encrypted) took over (migration 022), every webhook created since then has it
+	// NULL, and WebhookConfig.SecretHash is a plain (non-pointer) string -- scanning SQL NULL
+	// into it fails the whole query. That failure wasn't pgx.ErrNoRows, so it fell through to
+	// the generic error path below, and receiveWebhook's caller collapses ANY error here into
+	// a 404 "webhook not found" -- so a real, enabled webhook looked like it didn't exist at
+	// all. ListWebhooks already omits this column for the same reason; match it here.
 	query := `
-		SELECT id, org_id, agent_id, name, provider, secret_hash, secret_encrypted, enabled, service_name, environment, stack_id, created_at, updated_at, last_used_at
+		SELECT id, org_id, agent_id, name, provider, secret_encrypted, enabled, service_name, environment, stack_id, created_at, updated_at, last_used_at
 		FROM webhook_configs
 		WHERE id = $1
 	`
 
 	var w WebhookConfig
 	err := s.db.QueryRow(ctx, query, webhookID).Scan(
-		&w.ID, &w.OrgID, &w.AgentID, &w.Name, &w.Provider, &w.SecretHash, &w.SecretEncrypted, &w.Enabled,
+		&w.ID, &w.OrgID, &w.AgentID, &w.Name, &w.Provider, &w.SecretEncrypted, &w.Enabled,
 		&w.ServiceName, &w.Environment, &w.StackID, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
 	)
 	if err != nil {
