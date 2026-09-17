@@ -1076,6 +1076,7 @@ export interface Deployment {
   updated_at: string;
   stack_id?: string;
   service_order?: number;
+  webhook_event_id?: string;
 }
 
 export interface ScanResult {
@@ -4650,11 +4651,12 @@ export const api = {
   getPolicyStats: () => fetchAPI<PolicyStats>("/policies/stats"),
 
   // Deployments
-  getDeployments: (agentId: string, params?: { service?: string; environment?: string; status?: string }) => {
+  getDeployments: (agentId: string, params?: { service?: string; environment?: string; status?: string; source?: string }) => {
     const searchParams = new URLSearchParams();
     if (params?.service) searchParams.set("service", params.service);
     if (params?.environment) searchParams.set("environment", params.environment);
     if (params?.status) searchParams.set("status", params.status);
+    if (params?.source) searchParams.set("source", params.source);
     const query = searchParams.toString();
     return fetchAPI<Deployment[]>(`/agents/${agentId}/deployments${query ? `?${query}` : ""}`);
   },

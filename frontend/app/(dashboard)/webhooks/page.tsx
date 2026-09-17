@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Webhook,
@@ -14,6 +15,8 @@ import {
   Settings,
   Key,
   AlertCircle,
+  Rocket,
+  Terminal,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -77,6 +80,14 @@ interface CreateWebhookResponse {
   created_at: string;
 }
 
+interface WebhookStats {
+  total_webhooks: number;
+  enabled_webhooks: number;
+  total_events: number;
+  failed_events: number;
+  deploys_via_webhooks: number;
+}
+
 const providerIcons: Record<string, string> = {
   github: "🐙",
   gitlab: "🦊",
@@ -99,6 +110,7 @@ const formatServiceName = (name: string) =>
   name === ALL_SERVICES_TARGET ? "All services" : name;
 
 function WebhooksPageContent() {
+  const router = useRouter();
   const [selectedWebhook, setSelectedWebhook] = useState<WebhookConfig | null>(null);
   const [copiedSecret, setCopiedSecret] = useState(false);
   const [copiedURL, setCopiedURL] = useState(false);
@@ -164,6 +176,16 @@ function WebhooksPageContent() {
     queryKey: ["webhooks", defaultAgent?.id],
     queryFn: () =>
       api.fetchAPI<WebhookConfig[]>(`/agents/${defaultAgent?.id}/webhooks`),
+    enabled: !!defaultAgent?.id,
+  });
+
+  // Aggregate counts across every webhook for this agent -- total/failed events and
+  // deploys actually triggered by a webhook. Independent of which row is selected,
+  // unlike webhookEvents below (which only covers whichever webhook is open).
+  const { data: webhookStats } = useQuery({
+    queryKey: ["webhook-stats", defaultAgent?.id],
+    queryFn: () =>
+      api.fetchAPI<WebhookStats>(`/agents/${defaultAgent?.id}/webhooks/stats`),
     enabled: !!defaultAgent?.id,
   });
 
@@ -248,9 +270,12 @@ function WebhooksPageContent() {
         deliveryRate: webhooks.length > 0
           ? Math.round((webhooks.filter((w) => w.last_used_at).length / webhooks.length) * 100)
           : 0,
-        failures: webhookEvents?.filter((e) => e.error).length || 0,
+        // From the agent-wide stats endpoint, not webhookEvents (which only covers
+        // whichever single webhook is currently selected in the detail panel).
+        failures: webhookStats?.failed_events ?? 0,
+        deploysViaWebhooks: webhookStats?.deploys_via_webhooks ?? 0,
       }
-    : { total: 0, enabled: 0, deliveryRate: 0, failures: 0 };
+    : { total: 0, enabled: 0, deliveryRate: 0, failures: 0, deploysViaWebhooks: 0 };
 
   const copyToClipboard = (text: string, type: "secret" | "url") => {
     navigator.clipboard.writeText(text);
@@ -367,7 +392,7 @@ function WebhooksPageContent() {
       />
 
       {/* Metrics */}
-      <MetricsGrid columns={4} className="mb-6">
+      <MetricsGrid columns={5} className="mb-6">
         <StatCard
           label="Total Webhooks"
           value={stats.total}
@@ -391,6 +416,13 @@ function WebhooksPageContent() {
           value={stats.failures}
           icon={XCircle}
           iconColor="text-red-600 dark:text-red-400"
+        />
+        <StatCard
+          label="Deploys via Webhooks"
+          value={stats.deploysViaWebhooks}
+          icon={Rocket}
+          iconColor="text-purple-600 dark:text-purple-400"
+          onClick={() => router.push("/docker/deployments?source=webhook")}
         />
       </MetricsGrid>
 
@@ -729,6 +761,58 @@ function WebhooksPageContent() {
                     </Badge>
                   </div>
                 </div>
+              </div>
+
+              {/* Usage instructions -- how to actually call this webhook. GitHub/GitLab sign
+                  requests themselves once configured in the provider's own UI, so those just
+                  get pointer instructions; generic/jenkins have no such UI, so they get a real,
+                  copyable curl example with the exact HMAC scheme this backend expects. */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  <span className="flex items-center gap-2">
+                    <Terminal className="h-4 w-4" />
+                    Usage
+                  </span>
+                </label>
+                {createdWebhook.provider === "github" && (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                    In your GitHub repo, go to <strong>Settings → Webhooks → Add webhook</strong>.
+                    Paste the URL above, set Content type to <code>application/json</code>, paste
+                    the Secret above, and select the events you want (e.g. <code>push</code>).
+                    GitHub signs every request itself once configured.
+                  </p>
+                )}
+                {createdWebhook.provider === "gitlab" && (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                    In your GitLab project, go to <strong>Settings → Webhooks</strong>. Paste the
+                    URL above into the URL field and the Secret above into the Secret token field,
+                    then enable the <strong>Push events</strong> trigger.
+                  </p>
+                )}
+                {(createdWebhook.provider === "generic" || createdWebhook.provider === "jenkins") && (() => {
+                  const url = `${typeof window !== "undefined" ? window.location.origin : ""}${createdWebhook.webhook_url}`;
+                  const isAllServices = createdWebhook.service_name === ALL_SERVICES_TARGET;
+                  const snippet = `BODY='{"git_repo":"github.com/you/repo","git_branch":"main","git_commit":"'"$(git rev-parse HEAD)"'","image_repository":"your/image","image_tag":"latest"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac '${createdWebhook.secret}' -r | cut -d' ' -f1)
+curl -X POST '${url}' \\
+  -H "Content-Type: application/json" \\
+  -H "X-Webhook-Signature: $SIG" \\
+  -d "$BODY"`;
+                  return (
+                    <div>
+                      <pre className="text-xs bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap">
+                        {snippet}
+                      </pre>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                        Run this from your build script (e.g. after pushing an image) to trigger a
+                        redeploy. The signature is a raw hex HMAC-SHA256 of the request body, sent
+                        in <code>X-Webhook-Signature</code> -- no <code>sha256=</code> prefix.
+                        {isAllServices &&
+                          " The git_repo/git_branch/git_commit/image_repository/image_tag fields are required by validation but ignored for an \"all services\" webhook -- every service redeploys on its own current image."}
+                      </p>
+                    </div>
+                  );
+                })()}
               </div>
 
               <button

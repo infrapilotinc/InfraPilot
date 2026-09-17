@@ -108,6 +108,62 @@ func (h *Handler) listWebhooks(c *gin.Context) {
 	c.JSON(http.StatusOK, responses)
 }
 
+// getWebhookStats returns aggregate counts across every webhook configured for this
+// agent -- total/enabled webhooks, total/failed events, and how many deployments
+// were actually created via a webhook (deployments.webhook_event_id IS NOT NULL).
+// Powers the KPI row on the webhooks page, which previously computed "failures" from
+// whichever single webhook happened to be selected in the detail panel (0 until a
+// row was clicked) rather than an org-wide count.
+func (h *Handler) getWebhookStats(c *gin.Context) {
+	orgID := c.MustGet("org_id").(uuid.UUID)
+	agentID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid agent ID"})
+		return
+	}
+	ctx := c.Request.Context()
+
+	var totalWebhooks, enabledWebhooks int
+	if err := h.db.QueryRow(ctx, `
+		SELECT COUNT(*), COUNT(*) FILTER (WHERE enabled)
+		FROM webhook_configs WHERE org_id = $1 AND agent_id = $2
+	`, orgID, agentID).Scan(&totalWebhooks, &enabledWebhooks); err != nil {
+		h.logger.Error("failed to count webhooks", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to compute webhook stats"})
+		return
+	}
+
+	var totalEvents, failedEvents int
+	if err := h.db.QueryRow(ctx, `
+		SELECT COUNT(*), COUNT(*) FILTER (WHERE we.error IS NOT NULL)
+		FROM webhook_events we
+		JOIN webhook_configs wc ON we.webhook_id = wc.id
+		WHERE wc.org_id = $1 AND wc.agent_id = $2
+	`, orgID, agentID).Scan(&totalEvents, &failedEvents); err != nil {
+		h.logger.Error("failed to count webhook events", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to compute webhook stats"})
+		return
+	}
+
+	var deploysViaWebhooks int
+	if err := h.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM deployments
+		WHERE org_id = $1 AND agent_id = $2 AND webhook_event_id IS NOT NULL
+	`, orgID, agentID).Scan(&deploysViaWebhooks); err != nil {
+		h.logger.Error("failed to count webhook-triggered deployments", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to compute webhook stats"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"total_webhooks":       totalWebhooks,
+		"enabled_webhooks":     enabledWebhooks,
+		"total_events":         totalEvents,
+		"failed_events":        failedEvents,
+		"deploys_via_webhooks": deploysViaWebhooks,
+	})
+}
+
 func (h *Handler) getWebhook(c *gin.Context) {
 	webhookID, err := uuid.Parse(c.Param("wid"))
 	if err != nil {
