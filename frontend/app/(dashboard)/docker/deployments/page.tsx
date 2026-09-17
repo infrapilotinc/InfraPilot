@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import {
   Package,
@@ -18,6 +19,7 @@ import {
   GitMerge,
   Layers,
   ClipboardList,
+  Webhook,
 } from "lucide-react";
 import { api, Deployment } from "@/lib/api";
 import { useDocker } from "@/lib/docker-context";
@@ -45,10 +47,14 @@ type StatusFilter = "all" | "running" | "failed" | "pending" | "scanning";
 export default function DeploymentsPage() {
   const queryClient = useQueryClient();
   const { selectedAgent, openDeploymentPanel } = useDocker();
+  const searchParams = useSearchParams();
 
   // Local state
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [searchFilter, setSearchFilter] = useState("");
+  // Pre-selected from the "Deploys via Webhooks" KPI card on the Webhooks page
+  // (?source=webhook), also toggleable here directly.
+  const [webhookOnly, setWebhookOnly] = useState(() => searchParams.get("source") === "webhook");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ total: number; completed: number; failed: string[] } | null>(null);
@@ -84,9 +90,10 @@ export default function DeploymentsPage() {
         d.service_name?.toLowerCase().includes(searchFilter.toLowerCase()) ||
         d.image_repository?.toLowerCase().includes(searchFilter.toLowerCase()) ||
         d.container_name?.toLowerCase().includes(searchFilter.toLowerCase());
-      return matchesStatus && matchesSearch;
+      const matchesSource = !webhookOnly || !!d.webhook_event_id;
+      return matchesStatus && matchesSearch && matchesSource;
     });
-  }, [deployments, statusFilter, searchFilter]);
+  }, [deployments, statusFilter, searchFilter, webhookOnly]);
 
   // Metrics
   const metrics = {
@@ -245,9 +252,16 @@ export default function DeploymentsPage() {
       key: "image_repository",
       header: "Image",
       render: (_: unknown, row: Deployment) => (
-        <div>
-          <p className="text-sm font-mono text-gray-900 dark:text-white truncate max-w-[200px]">{row.image_repository || "—"}</p>
-          {row.image_tag && <p className="text-xs text-primary-600 dark:text-primary-400 font-mono">:{row.image_tag}</p>}
+        <div className="flex items-center gap-2">
+          {row.webhook_event_id && (
+            <span title="Deployed via webhook" className="shrink-0">
+              <Webhook className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            </span>
+          )}
+          <div>
+            <p className="text-sm font-mono text-gray-900 dark:text-white truncate max-w-[200px]">{row.image_repository || "—"}</p>
+            {row.image_tag && <p className="text-xs text-primary-600 dark:text-primary-400 font-mono">:{row.image_tag}</p>}
+          </div>
         </div>
       ),
     },
@@ -331,6 +345,18 @@ export default function DeploymentsPage() {
         onRefresh={() => queryClient.invalidateQueries({ queryKey: ["deployments", selectedAgent] })}
         singleRow={true}
       />
+      <button
+        onClick={() => setWebhookOnly((v) => !v)}
+        className={cn(
+          "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors",
+          webhookOnly
+            ? "bg-blue-600 text-white"
+            : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
+        )}
+      >
+        <Webhook className="h-3.5 w-3.5" />
+        Webhook-triggered only
+      </button>
 
       {/* Selection Bar */}
       {deployments && deployments.length > 0 && (
