@@ -29,6 +29,7 @@ import { StatusIndicator } from "@/components/ui/StatusIndicator";
 import { Badge } from "@/components/ui/Badge";
 import { Timeline } from "@/components/ui/Timeline";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 interface WebhookConfig {
   id: string;
@@ -124,6 +125,8 @@ function WebhooksPageContent() {
     stack_id: undefined,
   });
   const [formError, setFormError] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   // "stack" (default, recommended) picks a real Stack + Service from dropdowns;
   // "standalone" is today's free-text field, for a service managed outside of Stacks.
   const [targetMode, setTargetMode] = useState<"stack" | "standalone">("stack");
@@ -218,6 +221,37 @@ function WebhooksPageContent() {
     onError: (error: Error) => {
       setFormError(error.message || "Failed to create webhook");
     },
+  });
+
+  // Toggle enabled/disabled mutation
+  const toggleWebhookMutation = useMutation({
+    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
+      return api.fetchAPI(`/agents/${defaultAgent?.id}/webhooks/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      });
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["webhooks", defaultAgent?.id] });
+      setSelectedWebhook((w) => (w ? { ...w, enabled: variables.enabled } : w));
+    },
+  });
+
+  // Delete webhook mutation
+  const deleteWebhookMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return api.fetchAPI(`/agents/${defaultAgent?.id}/webhooks/${id}`, {
+        method: "DELETE",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["webhooks", defaultAgent?.id] });
+      queryClient.invalidateQueries({ queryKey: ["webhook-stats", defaultAgent?.id] });
+      setShowDeleteConfirm(false);
+      setDeleteError(null);
+      setSelectedWebhook(null);
+    },
+    onError: (error: Error) => setDeleteError(error.message || "Failed to delete webhook"),
   });
 
   // Handle form submission
@@ -622,11 +656,27 @@ function WebhooksPageContent() {
                     Actions
                   </h3>
                   <div className="space-y-2">
-                    <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors">
+                    <button
+                      onClick={() =>
+                        toggleWebhookMutation.mutate({
+                          id: selectedWebhook.id,
+                          enabled: !selectedWebhook.enabled,
+                        })
+                      }
+                      disabled={toggleWebhookMutation.isPending}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+                    >
                       <Settings className="w-4 h-4" />
-                      {selectedWebhook.enabled ? "Disable Webhook" : "Enable Webhook"}
+                      {toggleWebhookMutation.isPending
+                        ? "Updating..."
+                        : selectedWebhook.enabled
+                        ? "Disable Webhook"
+                        : "Enable Webhook"}
                     </button>
-                    <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-900/50 rounded-lg transition-colors">
+                    <button
+                      onClick={() => setShowDeleteConfirm(true)}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-900/50 rounded-lg transition-colors"
+                    >
                       <Trash2 className="w-4 h-4" />
                       Delete Webhook
                     </button>
@@ -1017,6 +1067,20 @@ curl -X POST '${url}' \\
           )}
         </SlideOver.Body>
       </SlideOver>
+
+      {/* Delete Confirmation */}
+      <ConfirmDialog
+        isOpen={showDeleteConfirm && !!selectedWebhook}
+        onClose={() => { setShowDeleteConfirm(false); setDeleteError(null); }}
+        onConfirm={() => selectedWebhook && deleteWebhookMutation.mutate(selectedWebhook.id)}
+        title="Delete Webhook"
+        message={`Are you sure you want to delete "${selectedWebhook?.name}"? Any CI/CD provider still configured with this webhook's URL will start failing.`}
+        confirmText="Delete Webhook"
+        variant="danger"
+        icon="delete"
+        isLoading={deleteWebhookMutation.isPending}
+        error={deleteError}
+      />
     </div>
   );
 }
