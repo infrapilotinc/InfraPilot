@@ -63,19 +63,20 @@ func (s *Service) CreateWebhook(ctx context.Context, orgID, agentID uuid.UUID, r
 		Enabled:         true,
 		ServiceName:     req.ServiceName,
 		Environment:     req.Environment,
+		StackID:         req.StackID,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}
 
 	query := `
-		INSERT INTO webhook_configs (id, org_id, agent_id, name, provider, secret_encrypted, enabled, service_name, environment, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO webhook_configs (id, org_id, agent_id, name, provider, secret_encrypted, enabled, service_name, environment, stack_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`
 
 	_, err = s.db.Exec(ctx, query,
 		config.ID, config.OrgID, config.AgentID, config.Name, config.Provider,
 		config.SecretEncrypted, config.Enabled, config.ServiceName, config.Environment,
-		config.CreatedAt, config.UpdatedAt,
+		config.StackID, config.CreatedAt, config.UpdatedAt,
 	)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to create webhook: %w", err)
@@ -87,7 +88,7 @@ func (s *Service) CreateWebhook(ctx context.Context, orgID, agentID uuid.UUID, r
 // ListWebhooks lists all webhooks for an agent
 func (s *Service) ListWebhooks(ctx context.Context, orgID, agentID uuid.UUID) ([]*WebhookConfig, error) {
 	query := `
-		SELECT id, org_id, agent_id, name, provider, enabled, service_name, environment, created_at, updated_at, last_used_at
+		SELECT id, org_id, agent_id, name, provider, enabled, service_name, environment, stack_id, created_at, updated_at, last_used_at
 		FROM webhook_configs
 		WHERE org_id = $1 AND agent_id = $2
 		ORDER BY created_at DESC
@@ -104,7 +105,7 @@ func (s *Service) ListWebhooks(ctx context.Context, orgID, agentID uuid.UUID) ([
 		var w WebhookConfig
 		err := rows.Scan(
 			&w.ID, &w.OrgID, &w.AgentID, &w.Name, &w.Provider, &w.Enabled,
-			&w.ServiceName, &w.Environment, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
+			&w.ServiceName, &w.Environment, &w.StackID, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan webhook: %w", err)
@@ -117,16 +118,23 @@ func (s *Service) ListWebhooks(ctx context.Context, orgID, agentID uuid.UUID) ([
 
 // GetWebhook retrieves a webhook by ID
 func (s *Service) GetWebhook(ctx context.Context, webhookID uuid.UUID) (*WebhookConfig, error) {
+	// secret_hash is deliberately not selected: it's been nullable since encrypted secrets
+	// (secret_encrypted) took over (migration 022), every webhook created since then has it
+	// NULL, and WebhookConfig.SecretHash is a plain (non-pointer) string -- scanning SQL NULL
+	// into it fails the whole query. That failure wasn't pgx.ErrNoRows, so it fell through to
+	// the generic error path below, and receiveWebhook's caller collapses ANY error here into
+	// a 404 "webhook not found" -- so a real, enabled webhook looked like it didn't exist at
+	// all. ListWebhooks already omits this column for the same reason; match it here.
 	query := `
-		SELECT id, org_id, agent_id, name, provider, secret_hash, secret_encrypted, enabled, service_name, environment, created_at, updated_at, last_used_at
+		SELECT id, org_id, agent_id, name, provider, secret_encrypted, enabled, service_name, environment, stack_id, created_at, updated_at, last_used_at
 		FROM webhook_configs
 		WHERE id = $1
 	`
 
 	var w WebhookConfig
 	err := s.db.QueryRow(ctx, query, webhookID).Scan(
-		&w.ID, &w.OrgID, &w.AgentID, &w.Name, &w.Provider, &w.SecretHash, &w.SecretEncrypted, &w.Enabled,
-		&w.ServiceName, &w.Environment, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
+		&w.ID, &w.OrgID, &w.AgentID, &w.Name, &w.Provider, &w.SecretEncrypted, &w.Enabled,
+		&w.ServiceName, &w.Environment, &w.StackID, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -152,6 +160,9 @@ func (s *Service) UpdateWebhook(ctx context.Context, webhookID uuid.UUID, req *U
 	}
 	if req.Environment != nil {
 		updates["environment"] = *req.Environment
+	}
+	if req.StackID != nil {
+		updates["stack_id"] = *req.StackID
 	}
 
 	if len(updates) == 0 {
@@ -193,6 +204,20 @@ func (s *Service) DeleteWebhook(ctx context.Context, webhookID uuid.UUID) error 
 // ==================== Webhook Event Processing ====================
 
 // VerifyAndParse verifies the webhook signature and parses the payload
+// requireVerifiableSecret checks that a webhook actually can have its signature verified
+// before VerifyAndParse ever gets as far as parsing/trusting the payload. Both conditions
+// used to silently skip verification instead of rejecting the request -- see VerifyAndParse
+// for why that was a real, unauthenticated-deploy-triggering vulnerability.
+func (s *Service) requireVerifiableSecret(secretEncrypted []byte) error {
+	if s.encryptionSvc == nil {
+		return fmt.Errorf("webhook signature verification is unavailable: ENCRYPTION_KEY is not configured on this server")
+	}
+	if len(secretEncrypted) == 0 {
+		return fmt.Errorf("this webhook has no verifiable secret (likely created before encryption was configured) -- delete and recreate it")
+	}
+	return nil
+}
+
 func (s *Service) VerifyAndParse(ctx context.Context, webhookID uuid.UUID, headers map[string]string, payload []byte) (*BuildMetadata, error) {
 	// Get webhook config
 	config, err := s.GetWebhook(ctx, webhookID)
@@ -204,43 +229,46 @@ func (s *Service) VerifyAndParse(ctx context.Context, webhookID uuid.UUID, heade
 		return nil, fmt.Errorf("webhook is disabled")
 	}
 
-	// Verify webhook signature
-	if len(config.SecretEncrypted) > 0 && s.encryptionSvc != nil {
-		// Decrypt the secret
-		secret, err := s.encryptionSvc.Decrypt(config.SecretEncrypted)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt webhook secret: %w", err)
-		}
-
-		// Get the appropriate verifier
-		verifier, err := GetVerifier(config.Provider)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get verifier: %w", err)
-		}
-
-		// Get the signature header based on provider
-		signature := s.getSignatureHeader(headers, config.Provider)
-
-		// Verify the signature
-		if err := verifier.Verify(payload, signature, string(secret)); err != nil {
-			s.logger.Warn("webhook signature verification failed",
-				zap.String("webhook_id", webhookID.String()),
-				zap.String("provider", config.Provider),
-				zap.Error(err),
-			)
-			return nil, fmt.Errorf("signature verification failed: %w", err)
-		}
-
-		s.logger.Debug("webhook signature verified successfully",
-			zap.String("webhook_id", webhookID.String()),
-			zap.String("provider", config.Provider),
-		)
-	} else {
-		s.logger.Warn("webhook signature verification skipped - no encrypted secret available",
-			zap.String("webhook_id", webhookID.String()),
-			zap.String("provider", config.Provider),
-		)
+	// Verify webhook signature. This endpoint is deliberately public (registered outside
+	// the auth-protected route group, see handler.go) since real CI providers can't
+	// attach a session token -- this HMAC check is the ONLY authentication boundary it
+	// has. It must be fail-closed: silently skipping verification here (the previous
+	// behavior when encryptionSvc was nil or the webhook had no encrypted secret) let
+	// anyone who discovered a webhook's URL trigger a real deployment of an
+	// attacker-chosen image with zero authentication.
+	if err := s.requireVerifiableSecret(config.SecretEncrypted); err != nil {
+		return nil, err
 	}
+
+	// Decrypt the secret
+	secret, err := s.encryptionSvc.Decrypt(config.SecretEncrypted)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt webhook secret: %w", err)
+	}
+
+	// Get the appropriate verifier
+	verifier, err := GetVerifier(config.Provider)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get verifier: %w", err)
+	}
+
+	// Get the signature header based on provider
+	signature := s.getSignatureHeader(headers, config.Provider)
+
+	// Verify the signature
+	if err := verifier.Verify(payload, signature, string(secret)); err != nil {
+		s.logger.Warn("webhook signature verification failed",
+			zap.String("webhook_id", webhookID.String()),
+			zap.String("provider", config.Provider),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("signature verification failed: %w", err)
+	}
+
+	s.logger.Debug("webhook signature verified successfully",
+		zap.String("webhook_id", webhookID.String()),
+		zap.String("provider", config.Provider),
+	)
 
 	// Parse payload
 	parser, err := GetParser(config.Provider)

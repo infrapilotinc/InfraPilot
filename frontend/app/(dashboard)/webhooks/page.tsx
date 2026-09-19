@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Webhook,
@@ -14,10 +15,11 @@ import {
   Settings,
   Key,
   AlertCircle,
+  Rocket,
+  Terminal,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { FeatureGate } from "@/components/ui/FeatureGate";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Breadcrumb } from "@/components/ui/Breadcrumb";
 import { StatCard, MetricsGrid } from "@/components/ui/StatCard";
@@ -27,6 +29,7 @@ import { StatusIndicator } from "@/components/ui/StatusIndicator";
 import { Badge } from "@/components/ui/Badge";
 import { Timeline } from "@/components/ui/Timeline";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 interface WebhookConfig {
   id: string;
@@ -34,6 +37,7 @@ interface WebhookConfig {
   provider: "github" | "gitlab" | "jenkins" | "generic";
   service_name: string;
   environment: "dev" | "staging" | "prod";
+  stack_id?: string;
   enabled: boolean;
   webhook_url: string;
   created_at: string;
@@ -58,6 +62,10 @@ interface CreateWebhookRequest {
   provider: "github" | "gitlab" | "jenkins" | "generic";
   service_name: string;
   environment: "dev" | "staging" | "prod";
+  // Set when this webhook targets a service that belongs to a Stack -- the recommended
+  // path: the deploy it triggers gets real container config and correctly updates the
+  // stack's own status tracking. Omit for a genuinely standalone service.
+  stack_id?: string;
 }
 
 interface CreateWebhookResponse {
@@ -66,10 +74,19 @@ interface CreateWebhookResponse {
   provider: string;
   service_name: string;
   environment: string;
+  stack_id?: string;
   enabled: boolean;
   secret: string;
   webhook_url: string;
   created_at: string;
+}
+
+interface WebhookStats {
+  total_webhooks: number;
+  enabled_webhooks: number;
+  total_events: number;
+  failed_events: number;
+  deploys_via_webhooks: number;
 }
 
 const providerIcons: Record<string, string> = {
@@ -86,7 +103,15 @@ const providerColors: Record<string, string> = {
   generic: "text-blue-600 dark:text-blue-400",
 };
 
+// Matches backend webhook.AllServicesTarget -- a webhook can target one specific service
+// within a stack, or every service in it (redeployed on its own current image, same as
+// clicking "Redeploy Stack" with no selection).
+const ALL_SERVICES_TARGET = "*";
+const formatServiceName = (name: string) =>
+  name === ALL_SERVICES_TARGET ? "All services" : name;
+
 function WebhooksPageContent() {
+  const router = useRouter();
   const [selectedWebhook, setSelectedWebhook] = useState<WebhookConfig | null>(null);
   const [copiedSecret, setCopiedSecret] = useState(false);
   const [copiedURL, setCopiedURL] = useState(false);
@@ -97,8 +122,14 @@ function WebhooksPageContent() {
     provider: "github",
     service_name: "",
     environment: "dev",
+    stack_id: undefined,
   });
   const [formError, setFormError] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // "stack" (default, recommended) picks a real Stack + Service from dropdowns;
+  // "standalone" is today's free-text field, for a service managed outside of Stacks.
+  const [targetMode, setTargetMode] = useState<"stack" | "standalone">("stack");
 
   const queryClient = useQueryClient();
 
@@ -110,11 +141,54 @@ function WebhooksPageContent() {
 
   const defaultAgent = agents?.[0];
 
+  // Stacks + their services, for the Stack Service picker -- same endpoints/pattern
+  // StackRedeployModal already uses for the identical purpose.
+  const { data: stacks } = useQuery({
+    queryKey: ["managed-stacks-for-webhook", defaultAgent?.id],
+    queryFn: () => api.listManagedStacks(defaultAgent!.id),
+    enabled: !!defaultAgent?.id && isCreateOpen && targetMode === "stack",
+  });
+
+  const { data: stackDetail } = useQuery({
+    queryKey: ["managed-stack-detail-for-webhook", defaultAgent?.id, formData.stack_id],
+    queryFn: () => api.getManagedStack(defaultAgent!.id, formData.stack_id!),
+    enabled: !!defaultAgent?.id && !!formData.stack_id,
+  });
+
+  const stackServiceNames = Array.from(
+    new Set((stackDetail?.deployments ?? []).map((d) => d.service_name))
+  ).sort();
+
+  const handleSelectMode = (mode: "stack" | "standalone") => {
+    setTargetMode(mode);
+    setFormData((f) => ({ ...f, stack_id: undefined, service_name: "" }));
+  };
+
+  const handleSelectStack = (stackId: string) => {
+    const stack = stacks?.find((s) => s.id === stackId);
+    setFormData((f) => ({
+      ...f,
+      stack_id: stackId,
+      service_name: "",
+      environment: (stack?.environment as CreateWebhookRequest["environment"]) ?? f.environment,
+    }));
+  };
+
   // Fetch webhooks
   const { data: webhooks, isLoading } = useQuery({
     queryKey: ["webhooks", defaultAgent?.id],
     queryFn: () =>
       api.fetchAPI<WebhookConfig[]>(`/agents/${defaultAgent?.id}/webhooks`),
+    enabled: !!defaultAgent?.id,
+  });
+
+  // Aggregate counts across every webhook for this agent -- total/failed events and
+  // deploys actually triggered by a webhook. Independent of which row is selected,
+  // unlike webhookEvents below (which only covers whichever webhook is open).
+  const { data: webhookStats } = useQuery({
+    queryKey: ["webhook-stats", defaultAgent?.id],
+    queryFn: () =>
+      api.fetchAPI<WebhookStats>(`/agents/${defaultAgent?.id}/webhooks/stats`),
     enabled: !!defaultAgent?.id,
   });
 
@@ -149,6 +223,37 @@ function WebhooksPageContent() {
     },
   });
 
+  // Toggle enabled/disabled mutation
+  const toggleWebhookMutation = useMutation({
+    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
+      return api.fetchAPI(`/agents/${defaultAgent?.id}/webhooks/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      });
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["webhooks", defaultAgent?.id] });
+      setSelectedWebhook((w) => (w ? { ...w, enabled: variables.enabled } : w));
+    },
+  });
+
+  // Delete webhook mutation
+  const deleteWebhookMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return api.fetchAPI(`/agents/${defaultAgent?.id}/webhooks/${id}`, {
+        method: "DELETE",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["webhooks", defaultAgent?.id] });
+      queryClient.invalidateQueries({ queryKey: ["webhook-stats", defaultAgent?.id] });
+      setShowDeleteConfirm(false);
+      setDeleteError(null);
+      setSelectedWebhook(null);
+    },
+    onError: (error: Error) => setDeleteError(error.message || "Failed to delete webhook"),
+  });
+
   // Handle form submission
   const handleCreateWebhook = (e: React.FormEvent) => {
     e.preventDefault();
@@ -159,7 +264,16 @@ function WebhooksPageContent() {
       setFormError("Name is required");
       return;
     }
-    if (!formData.service_name.trim()) {
+    if (targetMode === "stack") {
+      if (!formData.stack_id) {
+        setFormError("Select a stack");
+        return;
+      }
+      if (!formData.service_name) {
+        setFormError("Select a service");
+        return;
+      }
+    } else if (!formData.service_name.trim() || formData.service_name === ALL_SERVICES_TARGET) {
       setFormError("Service name is required");
       return;
     }
@@ -172,11 +286,13 @@ function WebhooksPageContent() {
     setIsCreateOpen(false);
     setCreatedWebhook(null);
     setFormError(null);
+    setTargetMode("stack");
     setFormData({
       name: "",
       provider: "github",
       service_name: "",
       environment: "dev",
+      stack_id: undefined,
     });
   };
 
@@ -188,9 +304,12 @@ function WebhooksPageContent() {
         deliveryRate: webhooks.length > 0
           ? Math.round((webhooks.filter((w) => w.last_used_at).length / webhooks.length) * 100)
           : 0,
-        failures: webhookEvents?.filter((e) => e.error).length || 0,
+        // From the agent-wide stats endpoint, not webhookEvents (which only covers
+        // whichever single webhook is currently selected in the detail panel).
+        failures: webhookStats?.failed_events ?? 0,
+        deploysViaWebhooks: webhookStats?.deploys_via_webhooks ?? 0,
       }
-    : { total: 0, enabled: 0, deliveryRate: 0, failures: 0 };
+    : { total: 0, enabled: 0, deliveryRate: 0, failures: 0, deploysViaWebhooks: 0 };
 
   const copyToClipboard = (text: string, type: "secret" | "url") => {
     navigator.clipboard.writeText(text);
@@ -235,7 +354,7 @@ function WebhooksPageContent() {
           <div className="flex items-center gap-2 mt-1">
             <GitBranch className="h-3 w-3 text-gray-400" />
             <span className="text-xs text-gray-500 dark:text-gray-400">
-              {row.service_name}
+              {formatServiceName(row.service_name)}
             </span>
           </div>
         </div>
@@ -307,7 +426,7 @@ function WebhooksPageContent() {
       />
 
       {/* Metrics */}
-      <MetricsGrid columns={4} className="mb-6">
+      <MetricsGrid columns={5} className="mb-6">
         <StatCard
           label="Total Webhooks"
           value={stats.total}
@@ -331,6 +450,13 @@ function WebhooksPageContent() {
           value={stats.failures}
           icon={XCircle}
           iconColor="text-red-600 dark:text-red-400"
+        />
+        <StatCard
+          label="Deploys via Webhooks"
+          value={stats.deploysViaWebhooks}
+          icon={Rocket}
+          iconColor="text-purple-600 dark:text-purple-400"
+          onClick={() => router.push("/docker/deployments?source=webhook")}
         />
       </MetricsGrid>
 
@@ -398,7 +524,7 @@ function WebhooksPageContent() {
                     <div className="flex justify-between">
                       <span className="text-sm text-gray-500 dark:text-gray-400">Service</span>
                       <span className="text-sm text-gray-900 dark:text-white font-medium">
-                        {selectedWebhook.service_name}
+                        {formatServiceName(selectedWebhook.service_name)}
                       </span>
                     </div>
                     <div className="flex justify-between">
@@ -530,11 +656,27 @@ function WebhooksPageContent() {
                     Actions
                   </h3>
                   <div className="space-y-2">
-                    <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors">
+                    <button
+                      onClick={() =>
+                        toggleWebhookMutation.mutate({
+                          id: selectedWebhook.id,
+                          enabled: !selectedWebhook.enabled,
+                        })
+                      }
+                      disabled={toggleWebhookMutation.isPending}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+                    >
                       <Settings className="w-4 h-4" />
-                      {selectedWebhook.enabled ? "Disable Webhook" : "Enable Webhook"}
+                      {toggleWebhookMutation.isPending
+                        ? "Updating..."
+                        : selectedWebhook.enabled
+                        ? "Disable Webhook"
+                        : "Enable Webhook"}
                     </button>
-                    <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-900/50 rounded-lg transition-colors">
+                    <button
+                      onClick={() => setShowDeleteConfirm(true)}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-900/50 rounded-lg transition-colors"
+                    >
                       <Trash2 className="w-4 h-4" />
                       Delete Webhook
                     </button>
@@ -656,7 +798,7 @@ function WebhooksPageContent() {
                   </div>
                   <div className="flex justify-between py-2 border-b border-gray-100 dark:border-gray-800">
                     <span className="text-gray-500 dark:text-gray-400">Service</span>
-                    <span className="text-gray-900 dark:text-white">{createdWebhook.service_name}</span>
+                    <span className="text-gray-900 dark:text-white">{formatServiceName(createdWebhook.service_name)}</span>
                   </div>
                   <div className="flex justify-between py-2">
                     <span className="text-gray-500 dark:text-gray-400">Environment</span>
@@ -669,6 +811,58 @@ function WebhooksPageContent() {
                     </Badge>
                   </div>
                 </div>
+              </div>
+
+              {/* Usage instructions -- how to actually call this webhook. GitHub/GitLab sign
+                  requests themselves once configured in the provider's own UI, so those just
+                  get pointer instructions; generic/jenkins have no such UI, so they get a real,
+                  copyable curl example with the exact HMAC scheme this backend expects. */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  <span className="flex items-center gap-2">
+                    <Terminal className="h-4 w-4" />
+                    Usage
+                  </span>
+                </label>
+                {createdWebhook.provider === "github" && (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                    In your GitHub repo, go to <strong>Settings → Webhooks → Add webhook</strong>.
+                    Paste the URL above, set Content type to <code>application/json</code>, paste
+                    the Secret above, and select the events you want (e.g. <code>push</code>).
+                    GitHub signs every request itself once configured.
+                  </p>
+                )}
+                {createdWebhook.provider === "gitlab" && (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                    In your GitLab project, go to <strong>Settings → Webhooks</strong>. Paste the
+                    URL above into the URL field and the Secret above into the Secret token field,
+                    then enable the <strong>Push events</strong> trigger.
+                  </p>
+                )}
+                {(createdWebhook.provider === "generic" || createdWebhook.provider === "jenkins") && (() => {
+                  const url = `${typeof window !== "undefined" ? window.location.origin : ""}${createdWebhook.webhook_url}`;
+                  const isAllServices = createdWebhook.service_name === ALL_SERVICES_TARGET;
+                  const snippet = `BODY='{"git_repo":"github.com/you/repo","git_branch":"main","git_commit":"'"$(git rev-parse HEAD)"'","image_repository":"your/image","image_tag":"latest"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac '${createdWebhook.secret}' -r | cut -d' ' -f1)
+curl -X POST '${url}' \\
+  -H "Content-Type: application/json" \\
+  -H "X-Webhook-Signature: $SIG" \\
+  -d "$BODY"`;
+                  return (
+                    <div>
+                      <pre className="text-xs bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto font-mono whitespace-pre-wrap">
+                        {snippet}
+                      </pre>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                        Run this from your build script (e.g. after pushing an image) to trigger a
+                        redeploy. The signature is a raw hex HMAC-SHA256 of the request body, sent
+                        in <code>X-Webhook-Signature</code> -- no <code>sha256=</code> prefix.
+                        {isAllServices &&
+                          " The git_repo/git_branch/git_commit/image_repository/image_tag fields are required by validation but ignored for an \"all services\" webhook -- every service redeploys on its own current image."}
+                      </p>
+                    </div>
+                  );
+                })()}
               </div>
 
               <button
@@ -729,49 +923,124 @@ function WebhooksPageContent() {
                 </div>
               </div>
 
-              {/* Service Name */}
+              {/* Target: Stack Service (recommended) vs Standalone Service */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Service Name
+                  Deploys
                 </label>
-                <input
-                  type="text"
-                  value={formData.service_name}
-                  onChange={(e) => setFormData({ ...formData, service_name: e.target.value })}
-                  placeholder="e.g., my-app, api-server"
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  This name will be used to identify deployments
-                </p>
-              </div>
-
-              {/* Environment */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Target Environment
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(["dev", "staging", "prod"] as const).map((env) => (
-                    <button
-                      key={env}
-                      type="button"
-                      onClick={() => setFormData({ ...formData, environment: env })}
-                      className={cn(
-                        "px-4 py-2 rounded-lg border text-sm font-medium transition-colors",
-                        formData.environment === env
-                          ? env === "prod"
-                            ? "border-red-500 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300"
-                            : env === "staging"
-                            ? "border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300"
-                            : "border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300"
-                          : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300"
-                      )}
-                    >
-                      {env}
-                    </button>
-                  ))}
+                <div className="flex gap-2 mb-3">
+                  <button
+                    type="button"
+                    onClick={() => handleSelectMode("stack")}
+                    className={cn(
+                      "flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors",
+                      targetMode === "stack"
+                        ? "bg-primary-600 text-white"
+                        : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400"
+                    )}
+                  >
+                    Stack Service
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectMode("standalone")}
+                    className={cn(
+                      "flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors",
+                      targetMode === "standalone"
+                        ? "bg-primary-600 text-white"
+                        : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400"
+                    )}
+                  >
+                    Standalone Service
+                  </button>
                 </div>
+
+                {targetMode === "stack" ? (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Stack</label>
+                      <select
+                        value={formData.stack_id ?? ""}
+                        onChange={(e) => handleSelectStack(e.target.value)}
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      >
+                        <option value="">Select a stack…</option>
+                        {(stacks ?? []).map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name} ({s.environment})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Service</label>
+                      <select
+                        value={formData.service_name}
+                        onChange={(e) => setFormData({ ...formData, service_name: e.target.value })}
+                        disabled={!formData.stack_id}
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:opacity-50"
+                      >
+                        <option value="">
+                          {formData.stack_id ? "Select a service…" : "Select a stack first"}
+                        </option>
+                        {formData.stack_id && (
+                          <option value={ALL_SERVICES_TARGET}>All services (whole stack)</option>
+                        )}
+                        {stackServiceNames.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {formData.service_name === ALL_SERVICES_TARGET
+                        ? "Every service in the stack redeploys on its own current image (fresh pull) and the stack's status updates when they're done."
+                        : "Deploys will chain onto this service's current deployment (same config it's already running) and update the stack's status."}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Service Name</label>
+                      <input
+                        type="text"
+                        value={formData.service_name}
+                        onChange={(e) => setFormData({ ...formData, service_name: e.target.value })}
+                        placeholder="e.g., my-app, api-server"
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        For a service managed outside of Stacks. This name will be used to
+                        identify deployments.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Target Environment</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {(["dev", "staging", "prod"] as const).map((env) => (
+                          <button
+                            key={env}
+                            type="button"
+                            onClick={() => setFormData({ ...formData, environment: env })}
+                            className={cn(
+                              "px-4 py-2 rounded-lg border text-sm font-medium transition-colors",
+                              formData.environment === env
+                                ? env === "prod"
+                                  ? "border-red-500 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300"
+                                  : env === "staging"
+                                  ? "border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300"
+                                  : "border-green-500 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300"
+                                : "border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300"
+                            )}
+                          >
+                            {env}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Submit */}
@@ -798,17 +1067,29 @@ function WebhooksPageContent() {
           )}
         </SlideOver.Body>
       </SlideOver>
+
+      {/* Delete Confirmation */}
+      <ConfirmDialog
+        isOpen={showDeleteConfirm && !!selectedWebhook}
+        onClose={() => { setShowDeleteConfirm(false); setDeleteError(null); }}
+        onConfirm={() => selectedWebhook && deleteWebhookMutation.mutate(selectedWebhook.id)}
+        title="Delete Webhook"
+        message={`Are you sure you want to delete "${selectedWebhook?.name}"? Any CI/CD provider still configured with this webhook's URL will start failing.`}
+        confirmText="Delete Webhook"
+        variant="danger"
+        icon="delete"
+        isLoading={deleteWebhookMutation.isPending}
+        error={deleteError}
+      />
     </div>
   );
 }
 
-// Webhooks is a "connected" feature (doc 35): it requires a free account key.
-// Anonymous/keyless CE lacks the "webhooks" flag, so FeatureGate shows the
-// "get a free CE key" prompt; a free key unlocks it.
+// No FeatureGate here: CE already gates entry at setup (a Community Edition key is required
+// to use the instance at all), so a second per-page gate on top of that is redundant --
+// and it periodically re-locked already-unlocked pages when the license-tier-info fetch
+// flapped, since the gate re-checks it on every remount/refocus rather than trusting a key
+// that's already known to be present.
 export default function WebhooksPage() {
-  return (
-    <FeatureGate feature="webhooks" featureLabel="Webhooks">
-      <WebhooksPageContent />
-    </FeatureGate>
-  );
+  return <WebhooksPageContent />;
 }

@@ -65,6 +65,7 @@ type Deployment struct {
 	ProxyHostID      *uuid.UUID       `json:"proxy_host_id,omitempty"`
 	StackID          *uuid.UUID       `json:"stack_id,omitempty"`
 	ServiceOrder     int              `json:"service_order,omitempty"`
+	WebhookEventID   *uuid.UUID       `json:"webhook_event_id,omitempty"`
 	DeployedBy       *uuid.UUID       `json:"deployed_by,omitempty"`
 	DeployedAt       *time.Time       `json:"deployed_at,omitempty"`
 	CreatedAt        time.Time        `json:"created_at"`
@@ -140,6 +141,7 @@ func (h *Handler) listDeployments(c *gin.Context) {
 	service := c.Query("service")
 	environment := c.Query("environment")
 	status := c.Query("status")
+	source := c.Query("source") // "webhook" -- deployments created by a webhook call
 
 	query := `
 		SELECT id, org_id, agent_id, service_name, environment,
@@ -150,7 +152,7 @@ func (h *Handler) listDeployments(c *gin.Context) {
 		       policy_decision, policy_reason,
 		       status, status_message,
 		       container_id, container_name, proxy_host_id,
-		       stack_id, service_order,
+		       stack_id, service_order, webhook_event_id,
 		       deployed_by, deployed_at, created_at, updated_at
 		FROM deployments
 		WHERE org_id = $1 AND agent_id = $2
@@ -172,6 +174,9 @@ func (h *Handler) listDeployments(c *gin.Context) {
 		query += fmt.Sprintf(" AND status = $%d", argIdx)
 		args = append(args, status)
 		argIdx++
+	}
+	if source == "webhook" {
+		query += " AND webhook_event_id IS NOT NULL"
 	}
 
 	query += " ORDER BY created_at DESC LIMIT 100"
@@ -196,7 +201,7 @@ func (h *Handler) listDeployments(c *gin.Context) {
 			&d.PolicyDecision, &d.PolicyReason,
 			&d.Status, &d.StatusMessage,
 			&d.ContainerID, &d.ContainerName, &d.ProxyHostID,
-			&d.StackID, &d.ServiceOrder,
+			&d.StackID, &d.ServiceOrder, &d.WebhookEventID,
 			&d.DeployedBy, &d.DeployedAt, &d.CreatedAt, &d.UpdatedAt,
 		); err != nil {
 			h.logger.Warn("Failed to scan deployment", zap.Error(err))

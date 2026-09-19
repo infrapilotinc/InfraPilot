@@ -217,6 +217,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 
 				agents.GET("/:id/webhooks", h.listWebhooks)
 				agents.POST("/:id/webhooks", h.RequireModifyContainers(), h.createWebhook)
+				agents.GET("/:id/webhooks/stats", h.getWebhookStats)
 				agents.GET("/:id/webhooks/:wid", h.getWebhook)
 				agents.PUT("/:id/webhooks/:wid", h.RequireModifyContainers(), h.updateWebhook)
 				agents.DELETE("/:id/webhooks/:wid", h.RequireModifyContainers(), h.deleteWebhook)
