@@ -1,0 +1,6 @@
+# Canonical identities. Format: Proper Name <proper@email> Commit Name <commit@email>
+# secpulso, DevSimplex and the infrapilotsh org account are deliberately left as
+# separate identities.
+
+tybali <tayyabalihere@gmail.com> <hello@tayyabali.pro>
+tybali <tayyabalihere@gmail.com> Tayyab Ali <tayyabalihere@gmail.com>
