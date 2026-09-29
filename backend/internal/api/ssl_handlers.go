@@ -482,7 +482,7 @@ func (h *Handler) requestSSLCertificate(c *gin.Context) {
 
 			// Regenerate and dispatch nginx config with SSL enabled
 			if isSystemProxy {
-				go h.dispatchInfraPilotProxyConfig(c.Request.Context(), agentID, proxyID, req.Domain, true, http2Enabled, true)
+				go h.dispatchInfraPilotProxyConfig(context.Background(), agentID, proxyID, req.Domain, true, http2Enabled, true)
 			} else {
 				// For regular proxies (upstream or redirect), dispatch full config
 				go h.dispatchProxyConfigFull(c.Request.Context(), agentID, proxyID, req.Domain, upstream,
@@ -793,9 +793,13 @@ func (h *Handler) scanSSLCertificates(c *gin.Context) {
 			continue
 		}
 
+		certPath := filepath.Join(letsEncryptDir, entry.Name(), "fullchain.pem")
+		keyPath := filepath.Join(letsEncryptDir, entry.Name(), "privkey.pem")
+		// Wildcards are stored under _wildcard.<base> (see certDirName)
 		domain := entry.Name()
-		certPath := filepath.Join(letsEncryptDir, domain, "fullchain.pem")
-		keyPath := filepath.Join(letsEncryptDir, domain, "privkey.pem")
+		if strings.HasPrefix(domain, "_wildcard.") {
+			domain = "*." + strings.TrimPrefix(domain, "_wildcard.")
+		}
 
 		// Check if cert and key files exist
 		if _, err := os.Stat(certPath); os.IsNotExist(err) {
@@ -1295,10 +1299,9 @@ func (h *Handler) completeDNSChallenge(c *gin.Context) {
 
 	if success {
 		// Auto-register the certificate in ssl_certificates table
-		// For wildcards like *.example.com, the cert is stored under example.com
+		// Wildcards like *.example.com are stored under _wildcard.example.com
 		certDomain := strings.TrimPrefix(req.Domain, "*.")
-		certPath := fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", certDomain)
-		keyPath := fmt.Sprintf("/etc/letsencrypt/live/%s/privkey.pem", certDomain)
+		certPath, keyPath := certDomainPaths(req.Domain)
 		isWildcard := strings.HasPrefix(req.Domain, "*.")
 
 		// Parse the certificate to get metadata
@@ -1347,7 +1350,10 @@ func (h *Handler) completeDNSChallenge(c *gin.Context) {
 			)
 		}
 
-		// Update proxy_hosts if applicable and regenerate nginx config
+		// Update the proxy for exactly this domain and regenerate its nginx config.
+		// Other proxies under the same base domain pick the new wildcard cert up on
+		// their next config write; they must not be touched here (a LIKE match used
+		// to flip SSL on all of them while only dispatching config for one).
 		var proxyID uuid.UUID
 		var forceSSL, http2Enabled, isSystemProxy, includeWWW bool
 		var proxyDomain, upstream, proxyType string
@@ -1355,15 +1361,15 @@ func (h *Handler) completeDNSChallenge(c *gin.Context) {
 		var redirectCode *int
 		err := h.db.QueryRow(c.Request.Context(), `
 			UPDATE proxy_hosts SET ssl_enabled = true, force_ssl = true, status = 'active', updated_at = NOW()
-			WHERE agent_id = $1 AND (domain = $2 OR domain LIKE $3)
+			WHERE agent_id = $1 AND domain = $2
 			RETURNING id, domain, force_ssl, http2_enabled, is_system_proxy, include_www,
 			          COALESCE(upstream_target, ''), COALESCE(proxy_type, 'upstream'), redirect_url, redirect_code
-		`, agentID, req.Domain, "%."+strings.TrimPrefix(req.Domain, "*.")).Scan(
+		`, agentID, req.Domain).Scan(
 			&proxyID, &proxyDomain, &forceSSL, &http2Enabled, &isSystemProxy, &includeWWW,
 			&upstream, &proxyType, &redirectURL, &redirectCode)
 
 		if err == nil {
-			h.logger.Info("Updated proxy_hosts for wildcard SSL",
+			h.logger.Info("Updated proxy_hosts for DNS-01 SSL",
 				zap.String("domain", req.Domain),
 				zap.String("proxy_domain", proxyDomain),
 				zap.String("proxy_id", proxyID.String()),
@@ -1372,7 +1378,7 @@ func (h *Handler) completeDNSChallenge(c *gin.Context) {
 
 			// Regenerate and dispatch nginx config with SSL enabled
 			if isSystemProxy {
-				go h.dispatchInfraPilotProxyConfig(c.Request.Context(), agentID, proxyID, proxyDomain, true, http2Enabled, true)
+				go h.dispatchInfraPilotProxyConfig(context.Background(), agentID, proxyID, proxyDomain, true, http2Enabled, true)
 			} else {
 				// For regular proxies (upstream or redirect), dispatch full config
 				go h.dispatchProxyConfigFull(c.Request.Context(), agentID, proxyID, proxyDomain, upstream,
@@ -1572,8 +1578,9 @@ func (h *Handler) uploadSSLCertificate(c *gin.Context) {
 		}
 	}
 
-	// Save to /data/certs/<domain>/
-	certDir := filepath.Join("/data/certs", cleanDomain)
+	// Save to /data/certs/<domain>/ (wildcards under _wildcard.<domain>/ so they
+	// don't overwrite an uploaded cert for the bare domain)
+	certDir := filepath.Join("/data/certs", certDirName(domain))
 	if err := os.MkdirAll(certDir, 0700); err != nil {
 		h.logger.Error("Failed to create cert directory", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create certificate directory"})
@@ -1600,6 +1607,29 @@ func (h *Handler) uploadSSLCertificate(c *gin.Context) {
 		zap.String("issuer", certInfo.Issuer),
 		zap.Time("expires_at", certInfo.ExpiresAt),
 	)
+
+	// Register it so it can be picked from a proxy's certificate list later
+	certName := cleanDomain
+	if certInfo.IsWildcard {
+		certName = "Wildcard: " + cleanDomain
+	}
+	if _, err := h.db.Exec(c.Request.Context(), `
+		INSERT INTO ssl_certificates (org_id, name, domain, is_wildcard, cert_path, key_path, issuer, subject, san, expires_at, auto_detected)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, FALSE)
+		ON CONFLICT (org_id, cert_path) DO UPDATE SET
+			name = EXCLUDED.name,
+			domain = EXCLUDED.domain,
+			is_wildcard = EXCLUDED.is_wildcard,
+			key_path = EXCLUDED.key_path,
+			issuer = EXCLUDED.issuer,
+			subject = EXCLUDED.subject,
+			san = EXCLUDED.san,
+			expires_at = EXCLUDED.expires_at,
+			updated_at = NOW()
+	`, orgID, certName, cleanDomain, certInfo.IsWildcard, certPath, keyPath,
+		certInfo.Issuer, certInfo.Subject, strings.Join(certInfo.SANs, ", "), certInfo.ExpiresAt); err != nil {
+		h.logger.Warn("Failed to register uploaded certificate", zap.Error(err))
+	}
 
 	// Optionally apply directly to a proxy host
 	if req.AgentID != "" && req.ProxyID != "" {
@@ -1630,8 +1660,7 @@ func (h *Handler) uploadSSLCertificate(c *gin.Context) {
 				if err != nil {
 					h.logger.Error("Failed to update proxy SSL settings", zap.Error(err))
 				} else {
-					go h.dispatchProxyConfigWithCert(context.Background(), agentID, proxyID,
-						proxyDomain, upstream, true, true, true, certPath, keyPath)
+					go h.redispatchProxyConfig(context.Background(), agentID, proxyID)
 				}
 			}
 		}

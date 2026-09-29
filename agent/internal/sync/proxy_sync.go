@@ -33,6 +33,7 @@ type ProxyHost struct {
 type ProxySyncer struct {
 	backendURL   string
 	agentID      string
+	token        string
 	nginx        *nginx.Controller
 	logger       *zap.Logger
 	syncInterval time.Duration
@@ -40,10 +41,11 @@ type ProxySyncer struct {
 }
 
 // NewProxySyncer creates a new proxy syncer
-func NewProxySyncer(backendURL, agentID string, nginxCtrl *nginx.Controller, logger *zap.Logger) *ProxySyncer {
+func NewProxySyncer(backendURL, agentID, token string, nginxCtrl *nginx.Controller, logger *zap.Logger) *ProxySyncer {
 	return &ProxySyncer{
 		backendURL:   backendURL,
 		agentID:      agentID,
+		token:        token,
 		nginx:        nginxCtrl,
 		logger:       logger,
 		syncInterval: 10 * time.Second,
@@ -176,8 +178,8 @@ func (s *ProxySyncer) fetchProxies(ctx context.Context) ([]ProxyHost, error) {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	// Use internal service-to-service auth (no JWT required for internal calls)
-	req.Header.Set("X-Internal-Service", "agent")
+	// Internal service-to-service auth (shared INTERNAL_SERVICE_TOKEN)
+	req.Header.Set("X-Internal-Token", s.token)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)

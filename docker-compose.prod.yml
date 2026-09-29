@@ -77,6 +77,8 @@ services:
 
       # Required
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      # Shared with the agent's proxy poller (nginx configs live in the agent's volume here)
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required (e.g. openssl rand -hex 32)}
 
       # Database
       DATABASE_URL: postgres://${POSTGRES_USER:-infrapilot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-infrapilot}?sslmode=disable
@@ -165,6 +167,7 @@ services:
       AGENT_ID: ${AGENT_ID:-00000000-0000-0000-0000-000000000001}
       BACKEND_GRPC_ADDR: backend:9090
       BACKEND_HTTP_URL: http://backend:8080
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required (e.g. openssl rand -hex 32)}
 
       # Nginx Management
       NGINX_CONTAINER_NAME: infrapilot-nginx

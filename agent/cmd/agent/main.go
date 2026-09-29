@@ -166,10 +166,18 @@ func main() {
 		}
 	}()
 
-	// Start proxy syncer (HTTP polling fallback when gRPC streaming isn't available)
+	// Start proxy syncer (HTTP polling fallback for split deployments where the agent
+	// writes into an nginx dir the backend's gRPC config pushes don't reach). It is
+	// opt-in via INTERNAL_SERVICE_TOKEN: when it ran alongside the gRPC pushes it
+	// rewrote their configs with its own simpler template and deleted any it
+	// couldn't validate (e.g. wildcard domains).
 	if cfg.IsManagedProxy() && nginxController != nil {
-		proxySyncer := sync.NewProxySyncer(cfg.BackendHTTPURL, cfg.AgentID, nginxController, logger)
-		go proxySyncer.Start(ctx)
+		if cfg.InternalServiceToken != "" {
+			proxySyncer := sync.NewProxySyncer(cfg.BackendHTTPURL, cfg.AgentID, cfg.InternalServiceToken, nginxController, logger)
+			go proxySyncer.Start(ctx)
+		} else {
+			logger.Info("Proxy HTTP poller disabled (INTERNAL_SERVICE_TOKEN not set); relying on backend config pushes")
+		}
 	}
 
 	// Start log streamer (sends container logs to backend for persistence)

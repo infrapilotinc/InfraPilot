@@ -571,6 +571,30 @@ export interface SSLCertificateRecord {
   updated_at: string;
 }
 
+// A certificate a proxy is using, or could be switched to
+export interface ProxyCertificateOption {
+  id?: string;
+  name: string;
+  cert_path: string;
+  key_path: string;
+  issuer?: string;
+  subject?: string;
+  sans: string[];
+  expires_at?: string;
+  days_left: number;
+  is_wildcard: boolean;
+  covers_domain: boolean;
+}
+
+export interface ProxyCertificate {
+  domain: string;
+  ssl_enabled: boolean;
+  mode: "auto" | "pinned";
+  current?: ProxyCertificateOption;
+  error?: string;
+  available: ProxyCertificateOption[];
+}
+
 export interface SSLCertificateScanResult {
   certificates: SSLCertificateRecord[];
   scanned_dir: string;
@@ -3801,6 +3825,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+
+  getProxyCertificate: (agentId: string, proxyId: string) =>
+    fetchAPI<ProxyCertificate>(`/agents/${agentId}/proxies/${proxyId}/certificate`),
+
+  setProxyCertificate: (
+    agentId: string,
+    proxyId: string,
+    data: { auto: true } | { cert_path: string }
+  ) =>
+    fetchAPI<{ message: string; domain: string }>(
+      `/agents/${agentId}/proxies/${proxyId}/certificate`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }
+    ),
 
   getProxyConfig: (agentId: string, proxyId: string) =>
     fetchAPI<{ domain: string; config: string }>(

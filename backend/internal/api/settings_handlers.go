@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -429,27 +428,10 @@ func generateInfraPilotNginxConfig(domain string, forceSSL, http2, sslEnabled bo
 	effectiveCertPath := certPath
 	effectiveKeyPath := keyPath
 	if effectiveCertPath == "" && sslEnabled {
-		// For subdomains, first check if wildcard cert exists for parent domain
-		parts := strings.Split(domain, ".")
-		if len(parts) > 2 {
-			// It's a subdomain - check if wildcard cert exists for parent domain
-			parentDomain := strings.Join(parts[1:], ".")
-			wildcardCertPath := fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", parentDomain)
-			wildcardKeyPath := fmt.Sprintf("/etc/letsencrypt/live/%s/privkey.pem", parentDomain)
-			// Check if wildcard cert exists on filesystem
-			if _, err := os.Stat(wildcardCertPath); err == nil {
-				// Wildcard cert exists - use it
-				effectiveCertPath = wildcardCertPath
-				effectiveKeyPath = wildcardKeyPath
-			}
-		}
-		// If no wildcard cert found, only use exact domain path if cert actually exists
-		if effectiveCertPath == "" {
-			exactCertPath := fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", domain)
-			if _, err := os.Stat(exactCertPath); err == nil {
-				effectiveCertPath = exactCertPath
-				effectiveKeyPath = fmt.Sprintf("/etc/letsencrypt/live/%s/privkey.pem", domain)
-			}
+		// Use the issued cert that actually covers this domain, if there is one
+		if cp, kp, found := resolveAutoCert(domain); found {
+			effectiveCertPath = cp
+			effectiveKeyPath = kp
 		}
 	}
 

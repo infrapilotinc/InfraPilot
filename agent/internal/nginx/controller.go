@@ -344,6 +344,11 @@ func (c *Controller) ApplyConfig(ctx context.Context, proxyID string, config Pro
 		zap.Duration("latency", status.Latency),
 	)
 
+	// Keep whatever is there now so a failed test can put it back. Deleting it
+	// instead would throw away a working config written by someone else.
+	configFile := filepath.Join(c.configPath, sanitizeFilename(config.Domain)+".conf")
+	previous, readErr := os.ReadFile(configFile)
+
 	// Step 2: Write the config
 	hash, err := c.WriteConfig(ctx, proxyID, config)
 	if err != nil {
@@ -352,8 +357,14 @@ func (c *Controller) ApplyConfig(ctx context.Context, proxyID string, config Pro
 
 	// Step 3: Test nginx config
 	if err := c.TestConfig(ctx); err != nil {
-		// Rollback: delete the config
-		c.DeleteConfig(ctx, config.Domain)
+		// Rollback: restore the previous file, or remove ours if there wasn't one
+		if readErr == nil {
+			if werr := c.WriteConfigFile(configFile, string(previous)); werr != nil {
+				c.logger.Error("Failed to restore previous config", zap.String("file", configFile), zap.Error(werr))
+			}
+		} else {
+			c.DeleteConfig(ctx, config.Domain)
+		}
 		return "", fmt.Errorf("nginx config validation failed, rolled back: %w", err)
 	}
 
@@ -398,8 +409,43 @@ func (c *Controller) execInContainer(ctx context.Context, cmd []string) (string,
 	return output, inspect.ExitCode, nil
 }
 
+// letsEncryptLiveDir is where issued certificates live (see ssl.CertManager).
+const letsEncryptLiveDir = "/etc/letsencrypt/live"
+
+// certDirName mirrors ssl.CertManager: wildcards live under _wildcard.<base>.
+func certDirName(domain string) string {
+	if strings.HasPrefix(domain, "*.") {
+		return "_wildcard." + strings.TrimPrefix(domain, "*.")
+	}
+	return domain
+}
+
+// resolveCertPaths picks an existing cert for domain: its own, a wildcard for its
+// parent, or the legacy location wildcards used to be saved in (the bare parent).
+func resolveCertPaths(domain string) (string, string) {
+	candidates := []string{domain}
+	if strings.HasPrefix(domain, "*.") {
+		candidates = append(candidates, strings.TrimPrefix(domain, "*."))
+	} else if parts := strings.Split(domain, "."); len(parts) > 2 {
+		parent := strings.Join(parts[1:], ".")
+		candidates = append(candidates, "*."+parent, parent)
+	}
+	for _, d := range candidates {
+		dir := filepath.Join(letsEncryptLiveDir, certDirName(d))
+		if _, err := os.Stat(filepath.Join(dir, "fullchain.pem")); err == nil {
+			return filepath.Join(dir, "fullchain.pem"), filepath.Join(dir, "privkey.pem")
+		}
+	}
+	dir := filepath.Join(letsEncryptLiveDir, certDirName(domain))
+	return filepath.Join(dir, "fullchain.pem"), filepath.Join(dir, "privkey.pem")
+}
+
 // generateConfig generates nginx config from template
 func (c *Controller) generateConfig(config ProxyConfig) (string, error) {
+	if config.SSLEnabled && (config.SSLCertPath == "" || config.SSLKeyPath == "") {
+		config.SSLCertPath, config.SSLKeyPath = resolveCertPaths(config.Domain)
+	}
+
 	tmpl, err := template.New("nginx").Parse(nginxTemplate)
 	if err != nil {
 		return "", err
@@ -495,14 +541,8 @@ server {
     access_log /var/log/nginx/domains/{{ .Domain }}.access.log infrapilot_analytics;
     error_log /var/log/nginx/domains/{{ .Domain }}.error.log warn;
 
-{{ if and .SSLCertPath .SSLKeyPath }}
-    # Custom certificate paths
     ssl_certificate {{ .SSLCertPath }};
     ssl_certificate_key {{ .SSLKeyPath }};
-{{ else }}
-    ssl_certificate /etc/letsencrypt/live/{{ .Domain }}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{{ .Domain }}/privkey.pem;
-{{ end }}
 
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers on;

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -322,7 +321,7 @@ func (h *Handler) createProxyHost(c *gin.Context) {
 	h.auditLog(c, userID, orgID, "proxy.create", "proxy_host", proxyID, req)
 
 	// Push config to agent via gRPC (only for upstream proxies that have an upstream target)
-	go h.dispatchProxyConfigFull(c.Request.Context(), agentID, proxyID, req.Domain, req.UpstreamTarget,
+	go h.dispatchProxyConfigFull(context.Background(), agentID, proxyID, req.Domain, req.UpstreamTarget,
 		req.ProxyType, redirectURL, redirectCode, req.ForceSSL, req.HTTP2Enabled, req.IncludeWWW, false)
 
 	// Fetch and return the created proxy
@@ -863,8 +862,7 @@ func (h *Handler) applyWildcardSSL(c *gin.Context) {
 	}
 
 	// Dispatch updated nginx config to agent
-	go h.dispatchProxyConfigWithCert(c.Request.Context(), agentID, proxyID, domain, upstream,
-		req.ForceSSL, req.HTTP2Enabled, req.SSLEnabled, req.SSLCertPath, req.SSLKeyPath)
+	go h.redispatchProxyConfig(context.Background(), agentID, proxyID)
 
 	// Audit log
 	h.auditLog(c, userID, orgID, "proxy.ssl_wildcard", "proxy_host", proxyID, gin.H{
@@ -1109,6 +1107,11 @@ func (h *Handler) previewProxyConfig(c *gin.Context) {
 		BasicAuthRealm:    req.BasicAuthRealm,
 		BearerAuthEnabled: req.BearerAuthEnabled,
 	}
+
+	// A certificate pinned from the proxy panel isn't part of this form, so keep it.
+	h.db.QueryRow(c.Request.Context(), `
+		SELECT ssl_cert_path, ssl_key_path FROM proxy_hosts WHERE id = $1
+	`, proxyID).Scan(&proxy.SSLCertPath, &proxy.SSLKeyPath)
 
 	// Build security headers for config generation
 	headers := SecurityHeaders{
@@ -1393,37 +1396,10 @@ func generateNginxConfig(proxy ProxyHost, headers SecurityHeaders, bearerTokens 
 		if proxy.SSLKeyPath != nil && *proxy.SSLKeyPath != "" {
 			keyPath = *proxy.SSLKeyPath
 		}
-		// If no explicit paths, determine the correct certificate to use
-		if certPath == "" {
-			// First, check if this exact domain has its own certificate
-			exactCertPath := "/etc/letsencrypt/live/" + proxy.Domain + "/fullchain.pem"
-			exactKeyPath := "/etc/letsencrypt/live/" + proxy.Domain + "/privkey.pem"
-
-			if _, err := os.Stat(exactCertPath); err == nil {
-				// Domain has its own certificate - use it
-				certPath = exactCertPath
-				keyPath = exactKeyPath
-			} else {
-				// No exact cert, check for wildcard cert at parent domain for subdomains
-				parts := strings.Split(proxy.Domain, ".")
-				if len(parts) > 2 {
-					// It's a subdomain - check if wildcard cert exists for parent domain
-					// Note: We only use parent cert if this domain doesn't have its own cert
-					parentDomain := strings.Join(parts[1:], ".")
-					wildcardCertPath := fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", parentDomain)
-					if _, err := os.Stat(wildcardCertPath); err == nil {
-						// Parent domain has a cert - use it (assuming it's a wildcard)
-						// TODO: Ideally verify it's actually a wildcard cert covering this subdomain
-						certPath = wildcardCertPath
-						keyPath = fmt.Sprintf("/etc/letsencrypt/live/%s/privkey.pem", parentDomain)
-					}
-				}
-				// If still no cert found, default to exact domain path (will fail if cert doesn't exist)
-				if certPath == "" {
-					certPath = exactCertPath
-					keyPath = exactKeyPath
-				}
-			}
+		// If no explicit paths, use the issued cert that actually covers this domain
+		// (its own, a wildcard for its parent, or a legacy wildcard location).
+		if certPath == "" || keyPath == "" {
+			certPath, keyPath, _ = resolveAutoCert(proxy.Domain)
 		}
 
 		config += fmt.Sprintf("    ssl_certificate %s;\n", certPath)
@@ -1724,94 +1700,6 @@ func (h *Handler) reloadNginx(c *gin.Context) {
 
 // ============ gRPC Dispatch Functions ============
 
-// dispatchProxyConfig sends nginx config to the agent
-func (h *Handler) dispatchProxyConfig(ctx context.Context, agentID, proxyID uuid.UUID, domain, upstream string, forceSSL, http2, includeWWW, sslEnabled bool) {
-	agentIDStr := agentID.String()
-
-	if !agentgrpc.IsAgentConnected(agentIDStr) {
-		h.logger.Warn("Agent not connected, cannot dispatch proxy config",
-			zap.String("agent_id", agentIDStr),
-			zap.String("domain", domain),
-		)
-		return
-	}
-
-	// Fetch security headers for complete config
-	var headers SecurityHeaders
-	h.db.QueryRow(ctx, `
-		SELECT id, proxy_host_id, hsts_enabled, hsts_max_age, x_frame_options,
-		       x_content_type_options, x_xss_protection, content_security_policy
-		FROM proxy_security_headers
-		WHERE proxy_host_id = $1
-	`, proxyID).Scan(
-		&headers.ID, &headers.ProxyHostID, &headers.HSTSEnabled, &headers.HSTSMaxAge,
-		&headers.XFrameOptions, &headers.XContentTypeOptions, &headers.XXSSProtection,
-		&headers.ContentSecurityPolicy,
-	)
-
-	// Fetch basic auth settings
-	var basicAuthEnabled, bearerAuthEnabled bool
-	var basicAuthRealm string
-	var basicAuthExcludedPaths []string
-	h.db.QueryRow(ctx, `
-		SELECT COALESCE(basic_auth_enabled, false), COALESCE(basic_auth_realm, 'Restricted'),
-		       COALESCE(basic_auth_excluded_paths, '{}'), COALESCE(bearer_auth_enabled, false)
-		FROM proxy_hosts WHERE id = $1
-	`, proxyID).Scan(&basicAuthEnabled, &basicAuthRealm, &basicAuthExcludedPaths, &bearerAuthEnabled)
-
-	bearerTokens, err := h.decryptBearerTokens(ctx, proxyID)
-	if err != nil {
-		h.logger.Error("Failed to decrypt bearer tokens", zap.Error(err))
-	}
-
-	// Build proxy host for config generation
-	proxy := ProxyHost{
-		Domain:                 domain,
-		UpstreamTarget:         upstream,
-		ForceSSL:               forceSSL,
-		HTTP2Enabled:           http2,
-		IncludeWWW:             includeWWW,
-		SSLEnabled:             sslEnabled,
-		BasicAuthEnabled:       basicAuthEnabled,
-		BasicAuthRealm:         basicAuthRealm,
-		BasicAuthExcludedPaths: basicAuthExcludedPaths,
-		BearerAuthEnabled:      bearerAuthEnabled,
-	}
-
-	// Generate nginx config
-	config := generateNginxConfig(proxy, headers, bearerTokens)
-
-	// Build config path
-	configPath := filepath.Join("/data/nginx/conf.d", sanitizeFilename(domain)+".conf")
-
-	// Create command with config content
-	cmdPayload, _ := json.Marshal(agentgrpc.NginxCommand{
-		Action:        agentgrpc.NginxActionWriteConfig,
-		ConfigContent: config,
-		ConfigPath:    configPath,
-	})
-
-	cmd := &agentgrpc.BackendMessage{
-		RequestId: uuid.New().String(),
-		Type:      "nginx",
-		Command:   cmdPayload,
-	}
-
-	// Send command (non-blocking)
-	if err := agentgrpc.SendCommandAsync(agentIDStr, cmd); err != nil {
-		h.logger.Error("Failed to dispatch proxy config",
-			zap.Error(err),
-			zap.String("domain", domain),
-		)
-		return
-	}
-
-	h.logger.Info("Dispatched proxy config to agent",
-		zap.String("agent_id", agentIDStr),
-		zap.String("domain", domain),
-	)
-}
-
 // dispatchProxyConfigFull sends nginx config to the agent with full proxy details including redirect support
 func (h *Handler) dispatchProxyConfigFull(ctx context.Context, agentID, proxyID uuid.UUID, domain, upstream, proxyType string, redirectURL *string, redirectCode *int, forceSSL, http2, includeWWW, sslEnabled bool) {
 	agentIDStr := agentID.String()
@@ -1837,15 +1725,17 @@ func (h *Handler) dispatchProxyConfigFull(ctx context.Context, agentID, proxyID 
 		&headers.ContentSecurityPolicy,
 	)
 
-	// Fetch basic auth settings
+	// Fetch basic auth settings and any certificate the proxy is pinned to
 	var basicAuthEnabled, bearerAuthEnabled bool
 	var basicAuthRealm string
 	var basicAuthExcludedPaths []string
+	var sslCertPath, sslKeyPath *string
 	h.db.QueryRow(ctx, `
 		SELECT COALESCE(basic_auth_enabled, false), COALESCE(basic_auth_realm, 'Restricted'),
-		       COALESCE(basic_auth_excluded_paths, '{}'), COALESCE(bearer_auth_enabled, false)
+		       COALESCE(basic_auth_excluded_paths, '{}'), COALESCE(bearer_auth_enabled, false),
+		       ssl_cert_path, ssl_key_path
 		FROM proxy_hosts WHERE id = $1
-	`, proxyID).Scan(&basicAuthEnabled, &basicAuthRealm, &basicAuthExcludedPaths, &bearerAuthEnabled)
+	`, proxyID).Scan(&basicAuthEnabled, &basicAuthRealm, &basicAuthExcludedPaths, &bearerAuthEnabled, &sslCertPath, &sslKeyPath)
 
 	bearerTokens, err := h.decryptBearerTokens(ctx, proxyID)
 	if err != nil {
@@ -1878,6 +1768,8 @@ func (h *Handler) dispatchProxyConfigFull(ctx context.Context, agentID, proxyID 
 		BasicAuthRealm:         basicAuthRealm,
 		BasicAuthExcludedPaths: basicAuthExcludedPaths,
 		BearerAuthEnabled:      bearerAuthEnabled,
+		SSLCertPath:            sslCertPath,
+		SSLKeyPath:             sslKeyPath,
 	}
 
 	// Generate nginx config
@@ -1936,101 +1828,6 @@ func (h *Handler) redispatchProxyConfig(ctx context.Context, agentID, proxyID uu
 	}
 
 	h.dispatchProxyConfigFull(ctx, agentID, proxyID, domain, upstreamTarget, proxyType, redirectURL, &redirectCode, forceSSL, http2Enabled, includeWWW, sslEnabled)
-}
-
-// dispatchProxyConfigWithCert sends nginx config with custom certificate paths to the agent
-func (h *Handler) dispatchProxyConfigWithCert(ctx context.Context, agentID, proxyID uuid.UUID, domain, upstream string, forceSSL, http2, sslEnabled bool, certPath, keyPath string) {
-	agentIDStr := agentID.String()
-
-	if !agentgrpc.IsAgentConnected(agentIDStr) {
-		h.logger.Warn("Agent not connected, cannot dispatch proxy config",
-			zap.String("agent_id", agentIDStr),
-			zap.String("domain", domain),
-		)
-		return
-	}
-
-	// Fetch security headers for complete config
-	var headers SecurityHeaders
-	h.db.QueryRow(ctx, `
-		SELECT id, proxy_host_id, hsts_enabled, hsts_max_age, x_frame_options,
-		       x_content_type_options, x_xss_protection, content_security_policy
-		FROM proxy_security_headers
-		WHERE proxy_host_id = $1
-	`, proxyID).Scan(
-		&headers.ID, &headers.ProxyHostID, &headers.HSTSEnabled, &headers.HSTSMaxAge,
-		&headers.XFrameOptions, &headers.XContentTypeOptions, &headers.XXSSProtection,
-		&headers.ContentSecurityPolicy,
-	)
-
-	// Fetch auth settings. This path (wildcard SSL / custom cert upload) used to
-	// build the ProxyHost with these left at their zero values, which silently
-	// stripped Basic Auth AND Bearer Auth from the regenerated config on ANY
-	// wildcard-cert action against an already-protected proxy -- a real auth-bypass
-	// bug, not a cosmetic gap, since a proxy could go from protected to fully public
-	// with no warning the moment someone reapplied SSL.
-	var basicAuthEnabled, bearerAuthEnabled bool
-	var basicAuthRealm string
-	var basicAuthExcludedPaths []string
-	h.db.QueryRow(ctx, `
-		SELECT COALESCE(basic_auth_enabled, false), COALESCE(basic_auth_realm, 'Restricted'),
-		       COALESCE(basic_auth_excluded_paths, '{}'), COALESCE(bearer_auth_enabled, false)
-		FROM proxy_hosts WHERE id = $1
-	`, proxyID).Scan(&basicAuthEnabled, &basicAuthRealm, &basicAuthExcludedPaths, &bearerAuthEnabled)
-
-	bearerTokens, err := h.decryptBearerTokens(ctx, proxyID)
-	if err != nil {
-		h.logger.Error("Failed to decrypt bearer tokens", zap.Error(err))
-	}
-
-	// Build proxy host for config generation
-	proxy := ProxyHost{
-		Domain:                 domain,
-		UpstreamTarget:         upstream,
-		ForceSSL:               forceSSL,
-		HTTP2Enabled:           http2,
-		SSLEnabled:             sslEnabled,
-		SSLCertPath:            &certPath,
-		SSLKeyPath:             &keyPath,
-		BasicAuthEnabled:       basicAuthEnabled,
-		BasicAuthRealm:         basicAuthRealm,
-		BasicAuthExcludedPaths: basicAuthExcludedPaths,
-		BearerAuthEnabled:      bearerAuthEnabled,
-	}
-
-	// Generate nginx config with custom cert paths
-	config := generateNginxConfig(proxy, headers, bearerTokens)
-
-	// Build config path
-	configPath := filepath.Join("/data/nginx/conf.d", sanitizeFilename(domain)+".conf")
-
-	// Create command with config content
-	cmdPayload, _ := json.Marshal(agentgrpc.NginxCommand{
-		Action:        agentgrpc.NginxActionWriteConfig,
-		ConfigContent: config,
-		ConfigPath:    configPath,
-	})
-
-	cmd := &agentgrpc.BackendMessage{
-		RequestId: uuid.New().String(),
-		Type:      "nginx",
-		Command:   cmdPayload,
-	}
-
-	// Send command (non-blocking)
-	if err := agentgrpc.SendCommandAsync(agentIDStr, cmd); err != nil {
-		h.logger.Error("Failed to dispatch proxy config with cert",
-			zap.Error(err),
-			zap.String("domain", domain),
-		)
-		return
-	}
-
-	h.logger.Info("Dispatched proxy config with custom cert to agent",
-		zap.String("agent_id", agentIDStr),
-		zap.String("domain", domain),
-		zap.String("cert_path", certPath),
-	)
 }
 
 // dispatchDeleteProxy sends delete command to the agent
@@ -2174,7 +1971,7 @@ func (h *Handler) dispatchHtpasswd(ctx context.Context, agentID, proxyID uuid.UU
 			)
 		} else {
 			// For regular proxies, regenerate nginx config without basic auth
-			h.dispatchProxyConfig(ctx, agentID, proxyID, domain, upstreamTarget, forceSSL, http2Enabled, includeWWW, sslEnabled)
+			h.redispatchProxyConfig(ctx, agentID, proxyID)
 			h.logger.Info("Regenerated regular proxy nginx config without basic auth",
 				zap.String("domain", domain),
 			)
@@ -2233,7 +2030,7 @@ func (h *Handler) dispatchHtpasswd(ctx context.Context, agentID, proxyID uuid.UU
 		)
 	} else {
 		// For regular proxies, regenerate nginx config with basic auth
-		h.dispatchProxyConfig(ctx, agentID, proxyID, domain, upstreamTarget, forceSSL, http2Enabled, includeWWW, sslEnabled)
+		h.redispatchProxyConfig(ctx, agentID, proxyID)
 		h.logger.Info("Regenerated regular proxy nginx config with basic auth",
 			zap.String("domain", domain),
 			zap.Bool("basic_auth_enabled", basicAuthEnabled),

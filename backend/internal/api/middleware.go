@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strings"
 	"time"
@@ -68,11 +69,27 @@ func CORSMiddleware(allowedOrigins []string) gin.HandlerFunc {
 	}
 }
 
+// isInternalServiceRequest reports whether the request is an authenticated agent
+// call to the one route the agent polls over HTTP.
+func (h *Handler) isInternalServiceRequest(c *gin.Context) bool {
+	if h.cfg == nil || h.cfg.InternalServiceToken == "" {
+		return false
+	}
+	if c.Request.Method != http.MethodGet || c.FullPath() != "/api/v1/agents/:id/proxies" {
+		return false
+	}
+	token := c.GetHeader("X-Internal-Token")
+	return token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(h.cfg.InternalServiceToken)) == 1
+}
+
 // AuthMiddleware validates JWT tokens
 func (h *Handler) AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Allow internal service calls (from agent)
-		if c.GetHeader("X-Internal-Service") == "agent" {
+		// Internal service calls (the agent's proxy poller) must present the shared
+		// INTERNAL_SERVICE_TOKEN, and may only read the proxy list. A bare
+		// "X-Internal-Service: agent" header used to be enough to skip auth on every
+		// protected route.
+		if h.isInternalServiceRequest(c) {
 			// Set a service identity for internal calls
 			c.Set("internal_service", true)
 			// Parse org_id as UUID to match handler expectations

@@ -30,6 +30,7 @@ import { SlideOver } from "@/components/ui/SlideOver";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Spinner } from "@/components/ui/Spinner";
 import { SSLWizard } from "@/components/ssl-wizard";
+import { ProxyCertificateCard } from "@/components/traffic/ProxyCertificateCard";
 import {
   Button,
   Input,
@@ -541,6 +542,9 @@ export function ProxyPanel() {
                   >
                     Setup SSL Certificate
                   </Button>
+                )}
+                {selectedAgent && proxy.status !== "ssl_pending" && (
+                  <ProxyCertificateCard agentId={selectedAgent} proxyId={proxy.id} />
                 )}
               </div>
             </Section>

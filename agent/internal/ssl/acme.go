@@ -338,8 +338,14 @@ func (m *CertManager) CertificateExists(domain string) bool {
 	return err == nil
 }
 
-// getCertPath returns the path for a domain's certificates
+// getCertPath returns the path for a domain's certificates. Wildcards get their
+// own "_wildcard.<base>" folder: saving *.example.com under example.com (as this
+// used to) overwrote the apex cert, and the apex's next HTTP-01 renewal then
+// overwrote the wildcard. Underscores can't appear in hostnames, so no collision.
 func (m *CertManager) getCertPath(domain string) string {
+	if strings.HasPrefix(domain, "*.") {
+		return filepath.Join(m.CertDir, "live", "_wildcard."+strings.TrimPrefix(domain, "*."))
+	}
 	return filepath.Join(m.CertDir, "live", domain)
 }
 
@@ -814,13 +820,8 @@ func (m *CertManager) StartDNSChallenge(domain string) (*DNSChallenge, error) {
 			return
 		}
 
-		// Save certificates
-		saveDomain := domain
-		if strings.HasPrefix(domain, "*.") {
-			saveDomain = strings.TrimPrefix(domain, "*.")
-		}
-
-		if err := m.saveCertificate(saveDomain, certificates); err != nil {
+		// Save certificates (wildcards go to their own folder, see getCertPath)
+		if err := m.saveCertificate(domain, certificates); err != nil {
 			resultCh <- fmt.Errorf("failed to save certificate: %w", err)
 			return
 		}

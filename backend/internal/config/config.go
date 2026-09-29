@@ -22,6 +22,9 @@ type Config struct {
 	EncryptionKey  string // 64-char hex string (32 bytes) for AES-256-GCM encryption
 	LicenseKey string // License key from infrapilot.org
 	DataDir    string // Persistent data directory for instance ID etc.
+	// InternalServiceToken authenticates the agent's HTTP proxy poller. Empty
+	// disables that path entirely (the single-container build doesn't need it).
+	InternalServiceToken string
 }
 
 func Load() (*Config, error) {
@@ -40,6 +43,7 @@ func Load() (*Config, error) {
 		EncryptionKey:  getEnv("ENCRYPTION_KEY", ""),
 		LicenseKey:     getEnv("LICENSE_KEY", ""),
 		DataDir:        getEnv("DATA_DIR", "/data"),
+		InternalServiceToken: getEnv("INTERNAL_SERVICE_TOKEN", ""),
 		// Version is injected at build time via main.version; not read from env here.
 	}
 

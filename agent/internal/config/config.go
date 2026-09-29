@@ -9,6 +9,9 @@ type Config struct {
 	AgentID            string
 	BackendGRPCAddr    string
 	BackendHTTPURL     string // HTTP URL for API polling
+	// InternalServiceToken must match the backend's INTERNAL_SERVICE_TOKEN for the
+	// HTTP proxy poller to run. Empty disables the poller.
+	InternalServiceToken string
 	EnrollmentToken    string
 	HeartbeatInterval  int
 	NginxConfigPath    string
@@ -43,6 +46,7 @@ func Load() (*Config, error) {
 		AgentID:            getEnv("AGENT_ID", ""),
 		BackendGRPCAddr:    getEnv("BACKEND_GRPC_ADDR", "localhost:9090"),
 		BackendHTTPURL:     getEnv("BACKEND_HTTP_URL", "http://backend:8080"),
+		InternalServiceToken: getEnv("INTERNAL_SERVICE_TOKEN", ""),
 		EnrollmentToken:    getEnv("ENROLLMENT_TOKEN", ""),
 		HeartbeatInterval:  getEnvInt("HEARTBEAT_INTERVAL", 30),
 		NginxConfigPath:    getEnv("NGINX_CONFIG_PATH", "/etc/nginx/conf.d"),
