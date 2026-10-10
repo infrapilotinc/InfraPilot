@@ -54,6 +54,9 @@ type Stack struct {
 	// RedeployServices is the persisted default service-name selection for stack-level
 	// redeploy; nil means "all services" (never explicitly saved yet).
 	RedeployServices []string `json:"redeploy_services,omitempty"`
+	// Files are the stack's saved companion files (v3/45), returned so the edit wizard can pre-fill
+	// the Files step instead of asking for every bind-mounted script again.
+	Files []StackFile `json:"files,omitempty"`
 }
 
 type CreateStackRequest struct {
@@ -65,7 +68,8 @@ type CreateStackRequest struct {
 	SkipScanning bool              `json:"skip_scanning,omitempty"`
 	// Stack companion files (v3/45): the files this compose bind-mounts (init scripts, entrypoints,
 	// configs), keyed by their relative bind source ("./scripts/db-init.sh" → path "scripts/db-init.sh").
-	// The agent materializes them on the host at deploy; never persisted with the stack.
+	// The agent materializes them on the host at deploy; also saved on the stack row (stacks.files)
+	// so redeploys and the edit wizard can reuse them.
 	Files []StackFile `json:"files,omitempty"`
 }
 
@@ -843,6 +847,18 @@ func (h *Handler) createStack(c *gin.Context) {
 	// Marshal variables to JSON
 	variablesJSON, _ := json.Marshal(req.Variables)
 
+	// Persist the companion files the compose actually needs (stacks.files, migration 053) so
+	// "keep same" redeploys and the edit wizard don't require re-uploading them.
+	var filesJSON []byte
+	if len(parsed.RequiredFiles) > 0 {
+		saved := make([]StackFile, 0, len(parsed.RequiredFiles))
+		for _, rf := range parsed.RequiredFiles {
+			f := fileMap[rf.Path]
+			saved = append(saved, StackFile{Path: rf.Path, Content: f.Content, Mode: f.Mode})
+		}
+		filesJSON, _ = json.Marshal(saved)
+	}
+
 	// Remove previous stacks with the same name+environment so redeploys don't accumulate rows
 	_, _ = h.db.Exec(c.Request.Context(), `
 		DELETE FROM stacks
@@ -855,12 +871,12 @@ func (h *Handler) createStack(c *gin.Context) {
 		INSERT INTO stacks (
 			org_id, agent_id, name, environment,
 			compose_yaml, variables, service_count,
-			status, deployed_by, skip_scanning
+			status, deployed_by, skip_scanning, files
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9, $10)
 		RETURNING id
 	`, orgID, agentID, req.Name, req.Environment,
-		req.ComposeYAML, variablesJSON, enabledCount, userID, req.SkipScanning,
+		req.ComposeYAML, variablesJSON, enabledCount, userID, req.SkipScanning, filesJSON,
 	).Scan(&stackID)
 
 	if err != nil {
@@ -1267,6 +1283,7 @@ func (h *Handler) getManagedStack(c *gin.Context) {
 	var s Stack
 	var variablesJSON []byte
 	var redeployServicesJSON []byte
+	var filesJSON []byte
 
 	err := h.db.QueryRow(c.Request.Context(), `
 		SELECT id, org_id, agent_id, name, environment,
@@ -1274,7 +1291,7 @@ func (h *Handler) getManagedStack(c *gin.Context) {
 		       service_count, running_count, failed_count,
 		       status, status_message,
 		       deployed_by, deployed_at, created_at, updated_at,
-		       redeploy_services
+		       redeploy_services, files
 		FROM stacks
 		WHERE id = $1 AND org_id = $2 AND agent_id = $3
 	`, stackID, orgID, agentID).Scan(
@@ -1283,7 +1300,7 @@ func (h *Handler) getManagedStack(c *gin.Context) {
 		&s.ServiceCount, &s.RunningCount, &s.FailedCount,
 		&s.Status, &s.StatusMessage,
 		&s.DeployedBy, &s.DeployedAt, &s.CreatedAt, &s.UpdatedAt,
-		&redeployServicesJSON,
+		&redeployServicesJSON, &filesJSON,
 	)
 
 	if err != nil {
@@ -1298,6 +1315,14 @@ func (h *Handler) getManagedStack(c *gin.Context) {
 	}
 	if len(redeployServicesJSON) > 0 {
 		json.Unmarshal(redeployServicesJSON, &s.RedeployServices)
+	}
+	if len(filesJSON) > 0 {
+		json.Unmarshal(filesJSON, &s.Files)
+	}
+	if len(s.Files) == 0 {
+		// Stacks deployed before files were saved on the row: recover the content from the
+		// services' latest container_config, which carries each companion file it mounted.
+		s.Files = h.recoverStackFiles(c.Request.Context(), s.ID, s.Name)
 	}
 
 	// Get associated deployments
@@ -1339,6 +1364,49 @@ func (h *Handler) getManagedStack(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, s)
+}
+
+// recoverStackFiles rebuilds a stack's companion files from the latest deployment row of each
+// service: buildServiceDeployConfig attaches every companion file's content to the bind-mount
+// volume it rewrote to <stackFilesBasePath>/<stackDir>/<path>. Best-effort; nil on any error.
+func (h *Handler) recoverStackFiles(ctx context.Context, stackID uuid.UUID, stackName string) []StackFile {
+	rows, err := h.db.Query(ctx, `
+		SELECT DISTINCT ON (service_name) container_config
+		FROM deployments
+		WHERE stack_id = $1
+		ORDER BY service_name, created_at DESC
+	`, stackID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	prefix := stackFilesBasePath + "/" + sanitizeStackDirName(stackName) + "/"
+	seen := map[string]bool{}
+	var out []StackFile
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil || len(raw) == 0 {
+			continue
+		}
+		var cfg DeploymentContainerConfig
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			continue
+		}
+		for _, v := range cfg.Volumes {
+			if v.Content == nil || v.HostPath == nil || !strings.HasPrefix(*v.HostPath, prefix) {
+				continue
+			}
+			path := strings.TrimPrefix(*v.HostPath, prefix)
+			if seen[path] {
+				continue
+			}
+			seen[path] = true
+			out = append(out, StackFile{Path: path, Content: *v.Content, Mode: v.FileMode})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
 }
 
 // ==================== Get Stack Progress ====================

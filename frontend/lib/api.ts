@@ -3461,6 +3461,8 @@ export interface ManagedStack {
   // Persisted default service-name selection for stack-level redeploy; absent/empty means
   // "all services" (never explicitly saved yet).
   redeploy_services?: string[];
+  // Saved companion files (v3/45), so the edit wizard can pre-fill the Files step.
+  files?: StackFile[];
 }
 
 export interface CreateStackRequest {

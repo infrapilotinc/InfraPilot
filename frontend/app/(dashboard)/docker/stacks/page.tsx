@@ -17,8 +17,10 @@ import {
   Trash2,
   FileCode,
   RotateCcw,
+  Pencil,
 } from "lucide-react";
-import { api, Stack, Container, ManagedStack, RedeployStackRequest } from "@/lib/api";
+import { api, Stack, Container, ManagedStack, RedeployStackRequest, StackFile } from "@/lib/api";
+import { StackDeployWizard } from "@/components/StackDeployWizard";
 import { useDocker } from "@/lib/docker-context";
 import { StatCard, MetricsGrid } from "@/components/ui/StatCard";
 import { Badge } from "@/components/ui/Badge";
@@ -70,6 +72,17 @@ function DockerStacksPageContent() {
   const [stackToDelete, setStackToDelete] = useState<UnifiedStack | null>(null);
   const [stackToRedeploy, setStackToRedeploy] = useState<UnifiedStack | null>(null);
   const [redeployError, setRedeployError] = useState<string | null>(null);
+  // Edit + redeploy. The stacks LIST omits compose_yaml, so fetch the full detail on edit.
+  const [editStackData, setEditStackData] = useState<{ name: string; environment: string; compose_yaml: string; variables?: Record<string, string>; files?: StackFile[] } | null>(null);
+  const handleEditStack = async (stack: UnifiedStack) => {
+    if (!stack.managedData || !selectedAgent) return;
+    try {
+      const full = await api.getManagedStack(selectedAgent, stack.managedData.id);
+      setEditStackData({ name: full.name, environment: full.environment, compose_yaml: full.compose_yaml, variables: full.variables, files: full.files });
+    } catch {
+      setEditStackData({ name: stack.name, environment: stack.managedData.environment, compose_yaml: stack.managedData.compose_yaml, variables: stack.managedData.variables });
+    }
+  };
 
   // Fetch discovered stacks from Docker
   const { data: discoveredStacks, isLoading: isLoadingDiscovered } = useQuery({
@@ -289,6 +302,7 @@ function DockerStacksPageContent() {
               onToggleExpand={() => toggleExpanded(stack.name)}
               onOpenContainer={openContainerPanel}
               onDelete={() => setStackToDelete(stack)}
+              onEdit={() => handleEditStack(stack)}
               onRedeploy={() => {
                 setRedeployError(null);
                 setStackToRedeploy(stack);
@@ -321,6 +335,19 @@ function DockerStacksPageContent() {
         confirmText={stackToDelete?.isManaged ? "Delete Stack" : "Close"}
         variant="danger"
         isLoading={deleteMutation.isPending}
+      />
+
+      {/* Edit + redeploy an existing stack (pre-filled; deploy replaces same name+env) */}
+      <StackDeployWizard
+        isOpen={!!editStackData}
+        onClose={() => setEditStackData(null)}
+        agentId={selectedAgent ?? undefined}
+        initialStack={editStackData ?? undefined}
+        onSuccess={() => {
+          setEditStackData(null);
+          queryClient.invalidateQueries({ queryKey: ["stacks", selectedAgent] });
+          queryClient.invalidateQueries({ queryKey: ["managed-stacks", selectedAgent] });
+        }}
       />
 
       {/* Redeploy */}
@@ -357,6 +384,7 @@ interface StackCardProps {
   onOpenContainer: (containerId: string) => void;
   onDelete: () => void;
   onRedeploy: () => void;
+  onEdit: () => void;
   renderStatusBadge: (status: StackStatus) => React.ReactNode;
   renderEnvBadge: (env: string) => React.ReactNode;
   formatRelativeTime: (date: string) => string;
@@ -369,6 +397,7 @@ function StackCard({
   onOpenContainer,
   onDelete,
   onRedeploy,
+  onEdit,
   renderStatusBadge,
   renderEnvBadge,
   formatRelativeTime,
@@ -440,6 +469,13 @@ function StackCard({
         <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
           {stack.isManaged && (
             <>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onEdit}
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
               <Button
                 variant="secondary"
                 size="sm"

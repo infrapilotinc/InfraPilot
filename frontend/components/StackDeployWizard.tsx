@@ -40,12 +40,16 @@ import {
   CreateStackRequest,
   ServiceOverride,
   StackProgress,
+  StackFile,
 } from "@/lib/api";
 
 export interface StackDeployWizardProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: (stackId: string) => void;
+  agentId?: string;
+  // Pre-fill from an existing stack to edit + redeploy it (deploy replaces same name+env).
+  initialStack?: { name: string; environment: string; compose_yaml: string; variables?: Record<string, string>; files?: StackFile[] };
 }
 
 type WizardStep = "yaml" | "variables" | "services" | "resources" | "files" | "review";
@@ -82,6 +86,8 @@ export function StackDeployWizard({
   isOpen,
   onClose,
   onSuccess,
+  agentId: agentIdProp,
+  initialStack,
 }: StackDeployWizardProps) {
   const queryClient = useQueryClient();
 
@@ -127,11 +133,12 @@ export function StackDeployWizard({
 
   const activeAgents = agents?.filter((a) => a.status === "active") || [];
   const defaultAgent = activeAgents[0];
+  const effectiveAgentId = agentIdProp || defaultAgent?.id;
 
   // Parse mutation
   const parseMutation = useMutation({
     mutationFn: () =>
-      api.parseComposeYAML(defaultAgent!.id, {
+      api.parseComposeYAML(effectiveAgentId!, {
         compose_yaml: composeYaml,
         variables,
       }),
@@ -170,7 +177,7 @@ export function StackDeployWizard({
   // Create stack mutation
   const createStackMutation = useMutation({
     mutationFn: (request: CreateStackRequest) =>
-      api.createStack(defaultAgent!.id, request),
+      api.createStack(effectiveAgentId!, request),
     onSuccess: (result) => {
       setStackId(result.id);
       setStage("deploying");
@@ -187,7 +194,7 @@ export function StackDeployWizard({
   const startPolling = useCallback((id: string) => {
     const poll = async () => {
       try {
-        const progress = await api.getStackProgress(defaultAgent!.id, id);
+        const progress = await api.getStackProgress(effectiveAgentId!, id);
         setProgress(progress);
 
         if (progress.status === "running" || progress.status === "partial") {
@@ -208,20 +215,28 @@ export function StackDeployWizard({
       }
     };
     poll();
-  }, [defaultAgent, queryClient, onSuccess]);
+  }, [effectiveAgentId, queryClient, onSuccess]);
 
-  // Reset state when dialog opens
+  // Reset state when dialog opens; pre-fill from an existing stack when editing.
   useEffect(() => {
     if (isOpen) {
       setCurrentStep("yaml");
       setStage("wizard");
-      setComposeYaml("");
-      setStackName("");
-      setEnvironment("dev");
+      setComposeYaml(initialStack?.compose_yaml ?? "");
+      setStackName(initialStack?.name ?? "");
+      setEnvironment(initialStack?.environment ?? "dev");
       setParseError(null);
       setParsedCompose(null);
-      setCompanionFiles({});
-      setVariables({});
+      // Pre-fill companion files from the saved stack, keyed by normalized path like required_files.
+      setCompanionFiles(
+        Object.fromEntries(
+          (initialStack?.files ?? []).map((f) => [
+            f.path,
+            { content: f.content, executable: (parseInt(f.mode || "0644", 8) & 0o111) !== 0 },
+          ])
+        )
+      );
+      setVariables(initialStack?.variables ?? {});
       setEnvInputMethod("manual");
       setEnvFileContent("");
       setEnvParseWarning(null);
@@ -233,7 +248,7 @@ export function StackDeployWizard({
       setErrorMessage(null);
       setProgress(null);
     }
-  }, [isOpen]);
+  }, [isOpen, initialStack]);
 
   // Parse .env file content and update variables
   const parseEnvFile = (content: string) => {
@@ -433,7 +448,7 @@ export function StackDeployWizard({
   };
 
   const handleDeploy = () => {
-    if (!defaultAgent) return;
+    if (!effectiveAgentId) return;
 
     const overrides: ServiceOverride[] = Object.entries(serviceConfigs).map(
       ([serviceName, config]) => ({
@@ -1366,7 +1381,7 @@ export function StackDeployWizard({
                       {currentStep === "review" ? (
                         <Button
                           onClick={handleDeploy}
-                          disabled={createStackMutation.isPending || !defaultAgent}
+                          disabled={createStackMutation.isPending || !effectiveAgentId}
                         >
                           {createStackMutation.isPending ? (
                             <>
