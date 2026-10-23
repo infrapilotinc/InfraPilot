@@ -859,6 +859,25 @@ func (h *Handler) createStack(c *gin.Context) {
 		filesJSON, _ = json.Marshal(saved)
 	}
 
+	// Remember which deploy webhooks point at the stack being replaced before deleting it:
+	// webhook_configs.stack_id is ON DELETE SET NULL, so without this an edit through the
+	// deploy wizard silently detached them and they fell back to the standalone path (no
+	// container config, or a literal "*" service for all-services webhooks).
+	var linkedWebhookIDs []uuid.UUID
+	if rows, err := h.db.Query(c.Request.Context(), `
+		SELECT w.id FROM webhook_configs w
+		JOIN stacks s ON s.id = w.stack_id
+		WHERE s.org_id = $1 AND s.agent_id = $2 AND s.name = $3 AND s.environment = $4
+	`, orgID, agentID, req.Name, req.Environment); err == nil {
+		for rows.Next() {
+			var id uuid.UUID
+			if rows.Scan(&id) == nil {
+				linkedWebhookIDs = append(linkedWebhookIDs, id)
+			}
+		}
+		rows.Close()
+	}
+
 	// Remove previous stacks with the same name+environment so redeploys don't accumulate rows
 	_, _ = h.db.Exec(c.Request.Context(), `
 		DELETE FROM stacks
@@ -883,6 +902,15 @@ func (h *Handler) createStack(c *gin.Context) {
 		h.logger.Error("Failed to create stack", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create stack"})
 		return
+	}
+
+	if len(linkedWebhookIDs) > 0 {
+		if _, err := h.db.Exec(c.Request.Context(),
+			`UPDATE webhook_configs SET stack_id = $1, updated_at = NOW() WHERE id = ANY($2)`,
+			stackID, linkedWebhookIDs,
+		); err != nil {
+			h.logger.Warn("Failed to re-link deploy webhooks to replaced stack", zap.String("stack_id", stackID.String()), zap.Error(err))
+		}
 	}
 
 	h.logger.Info("Stack created",

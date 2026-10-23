@@ -88,10 +88,11 @@ func (s *Service) CreateWebhook(ctx context.Context, orgID, agentID uuid.UUID, r
 // ListWebhooks lists all webhooks for an agent
 func (s *Service) ListWebhooks(ctx context.Context, orgID, agentID uuid.UUID) ([]*WebhookConfig, error) {
 	query := `
-		SELECT id, org_id, agent_id, name, provider, enabled, service_name, environment, stack_id, created_at, updated_at, last_used_at
-		FROM webhook_configs
-		WHERE org_id = $1 AND agent_id = $2
-		ORDER BY created_at DESC
+		SELECT w.id, w.org_id, w.agent_id, w.name, w.provider, w.enabled, w.service_name, w.environment, w.stack_id, s.name, w.created_at, w.updated_at, w.last_used_at
+		FROM webhook_configs w
+		LEFT JOIN stacks s ON s.id = w.stack_id
+		WHERE w.org_id = $1 AND w.agent_id = $2
+		ORDER BY w.created_at DESC
 	`
 
 	rows, err := s.db.Query(ctx, query, orgID, agentID)
@@ -105,7 +106,7 @@ func (s *Service) ListWebhooks(ctx context.Context, orgID, agentID uuid.UUID) ([
 		var w WebhookConfig
 		err := rows.Scan(
 			&w.ID, &w.OrgID, &w.AgentID, &w.Name, &w.Provider, &w.Enabled,
-			&w.ServiceName, &w.Environment, &w.StackID, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
+			&w.ServiceName, &w.Environment, &w.StackID, &w.StackName, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan webhook: %w", err)
@@ -126,15 +127,16 @@ func (s *Service) GetWebhook(ctx context.Context, webhookID uuid.UUID) (*Webhook
 	// a 404 "webhook not found" -- so a real, enabled webhook looked like it didn't exist at
 	// all. ListWebhooks already omits this column for the same reason; match it here.
 	query := `
-		SELECT id, org_id, agent_id, name, provider, secret_encrypted, enabled, service_name, environment, stack_id, created_at, updated_at, last_used_at
-		FROM webhook_configs
-		WHERE id = $1
+		SELECT w.id, w.org_id, w.agent_id, w.name, w.provider, w.secret_encrypted, w.enabled, w.service_name, w.environment, w.stack_id, s.name, w.created_at, w.updated_at, w.last_used_at
+		FROM webhook_configs w
+		LEFT JOIN stacks s ON s.id = w.stack_id
+		WHERE w.id = $1
 	`
 
 	var w WebhookConfig
 	err := s.db.QueryRow(ctx, query, webhookID).Scan(
 		&w.ID, &w.OrgID, &w.AgentID, &w.Name, &w.Provider, &w.SecretEncrypted, &w.Enabled,
-		&w.ServiceName, &w.Environment, &w.StackID, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
+		&w.ServiceName, &w.Environment, &w.StackID, &w.StackName, &w.CreatedAt, &w.UpdatedAt, &w.LastUsedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {

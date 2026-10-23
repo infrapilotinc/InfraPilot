@@ -48,7 +48,7 @@ const navigationSections: NavigationSection[] = [
     color: "text-yellow-600 dark:text-yellow-400",
     items: [
       { name: "Deployments", href: "/docker/deployments", icon: Package },
-      { name: "Webhooks", href: "/webhooks", icon: Webhook },
+      { name: "Deploy Webhooks", href: "/webhooks", icon: Webhook },
     ],
   },
   {

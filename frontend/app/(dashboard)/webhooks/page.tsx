@@ -38,6 +38,7 @@ interface WebhookConfig {
   service_name: string;
   environment: "dev" | "staging" | "prod";
   stack_id?: string;
+  stack_name?: string;
   enabled: boolean;
   webhook_url: string;
   created_at: string;
@@ -75,6 +76,7 @@ interface CreateWebhookResponse {
   service_name: string;
   environment: string;
   stack_id?: string;
+  stack_name?: string;
   enabled: boolean;
   secret: string;
   webhook_url: string;
@@ -354,6 +356,7 @@ function WebhooksPageContent() {
           <div className="flex items-center gap-2 mt-1">
             <GitBranch className="h-3 w-3 text-gray-400" />
             <span className="text-xs text-gray-500 dark:text-gray-400">
+              {row.stack_name ? `${row.stack_name} / ` : ""}
               {formatServiceName(row.service_name)}
             </span>
           </div>
@@ -404,13 +407,13 @@ function WebhooksPageContent() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="CI/CD Webhooks"
+        title="Deploy Webhooks"
         description="Manage webhook integrations for automated deployments"
         breadcrumbs={
           <Breadcrumb
             items={[
               { label: "Govern", href: "/" },
-              { label: "Webhooks", current: true },
+              { label: "Deploy Webhooks", current: true },
             ]}
           />
         }
@@ -420,7 +423,7 @@ function WebhooksPageContent() {
             className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center gap-2"
           >
             <Plus className="h-4 w-4" />
-            Create Webhook
+            Create Deploy Webhook
           </button>
         }
       />
@@ -477,7 +480,7 @@ function WebhooksPageContent() {
       ) : (
         <EmptyState
           icon={Webhook}
-          title="No Webhooks Configured"
+          title="No Deploy Webhooks Configured"
           description="Create a webhook to enable automated deployments from your CI/CD pipeline"
           action={
             <button
@@ -485,7 +488,7 @@ function WebhooksPageContent() {
               className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center gap-2"
             >
               <Plus className="h-4 w-4" />
-              Create Your First Webhook
+              Create Your First Deploy Webhook
             </button>
           }
         />
@@ -521,6 +524,12 @@ function WebhooksPageContent() {
                     Configuration
                   </h3>
                   <div className="space-y-3">
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">Stack</span>
+                      <span className="text-sm text-gray-900 dark:text-white font-medium">
+                        {selectedWebhook.stack_name ?? "Standalone service"}
+                      </span>
+                    </div>
                     <div className="flex justify-between">
                       <span className="text-sm text-gray-500 dark:text-gray-400">Service</span>
                       <span className="text-sm text-gray-900 dark:text-white font-medium">
@@ -697,7 +706,7 @@ function WebhooksPageContent() {
         <SlideOver.Header onClose={handleCloseCreate}>
           <div>
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-              {createdWebhook ? "Webhook Created" : "Create Webhook"}
+              {createdWebhook ? "Deploy Webhook Created" : "Create Deploy Webhook"}
             </h2>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
               {createdWebhook
@@ -795,6 +804,10 @@ function WebhooksPageContent() {
                       <span>{providerIcons[createdWebhook.provider]}</span>
                       {createdWebhook.provider}
                     </span>
+                  </div>
+                  <div className="flex justify-between py-2 border-b border-gray-100 dark:border-gray-800">
+                    <span className="text-gray-500 dark:text-gray-400">Stack</span>
+                    <span className="text-gray-900 dark:text-white">{createdWebhook.stack_name ?? "Standalone service"}</span>
                   </div>
                   <div className="flex justify-between py-2 border-b border-gray-100 dark:border-gray-800">
                     <span className="text-gray-500 dark:text-gray-400">Service</span>
@@ -1058,7 +1071,7 @@ curl -X POST '${url}' \\
                   ) : (
                     <>
                       <Plus className="h-4 w-4" />
-                      Create Webhook
+                      Create Deploy Webhook
                     </>
                   )}
                 </button>
@@ -1073,7 +1086,7 @@ curl -X POST '${url}' \\
         isOpen={showDeleteConfirm && !!selectedWebhook}
         onClose={() => { setShowDeleteConfirm(false); setDeleteError(null); }}
         onConfirm={() => selectedWebhook && deleteWebhookMutation.mutate(selectedWebhook.id)}
-        title="Delete Webhook"
+        title="Delete Deploy Webhook"
         message={`Are you sure you want to delete "${selectedWebhook?.name}"? Any CI/CD provider still configured with this webhook's URL will start failing.`}
         confirmText="Delete Webhook"
         variant="danger"

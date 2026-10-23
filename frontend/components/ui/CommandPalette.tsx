@@ -135,12 +135,12 @@ const defaultNavigationItems: CommandItem[] = [
   // Webhooks
   {
     id: "webhooks",
-    label: "Webhooks",
-    description: "Webhook integrations for CD triggers",
+    label: "Deploy Webhooks",
+    description: "CI/CD webhooks that trigger deployments",
     icon: Activity,
     href: "/webhooks",
     section: "Deploy",
-    keywords: ["webhook", "integration", "hook", "cd"],
+    keywords: ["webhook", "deploy", "integration", "hook", "cd"],
   },
 
   // Traffic

@@ -33,15 +33,17 @@ func (h *Handler) createWebhook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "targeting all services requires stack_id"})
 		return
 	}
+	var stackName *string
 	if req.StackID != nil {
-		var exists bool
+		var name string
 		if err := h.db.QueryRow(c.Request.Context(),
-			`SELECT EXISTS(SELECT 1 FROM stacks WHERE id = $1 AND org_id = $2 AND agent_id = $3)`,
+			`SELECT name FROM stacks WHERE id = $1 AND org_id = $2 AND agent_id = $3`,
 			*req.StackID, orgID, agentID,
-		).Scan(&exists); err != nil || !exists {
+		).Scan(&name); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "stack not found"})
 			return
 		}
+		stackName = &name
 	}
 
 	config, secret, err := h.webhookService.CreateWebhook(c.Request.Context(), orgID, agentID, &req)
@@ -61,6 +63,7 @@ func (h *Handler) createWebhook(c *gin.Context) {
 		ServiceName: config.ServiceName,
 		Environment: config.Environment,
 		StackID:     config.StackID,
+		StackName:   stackName,
 		Enabled:     config.Enabled,
 		Secret:      &secret, // Only returned on creation
 		WebhookURL:  webhookURL,
@@ -97,6 +100,7 @@ func (h *Handler) listWebhooks(c *gin.Context) {
 			ServiceName: config.ServiceName,
 			Environment: config.Environment,
 			StackID:     config.StackID,
+			StackName:   config.StackName,
 			Enabled:     config.Enabled,
 			Secret:      nil, // Never return secret after creation
 			WebhookURL:  webhookURL,
@@ -187,6 +191,7 @@ func (h *Handler) getWebhook(c *gin.Context) {
 		ServiceName: config.ServiceName,
 		Environment: config.Environment,
 		StackID:     config.StackID,
+		StackName:   config.StackName,
 		Enabled:     config.Enabled,
 		Secret:      nil, // Never return secret
 		WebhookURL:  webhookURL,

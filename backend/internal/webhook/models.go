@@ -25,6 +25,7 @@ type WebhookConfig struct {
 	ServiceName     string     `json:"service_name"`
 	Environment     string     `json:"environment"`
 	StackID         *uuid.UUID `json:"stack_id,omitempty"` // set when this webhook targets a service that belongs to a Stack
+	StackName       *string    `json:"stack_name,omitempty"` // joined from stacks for display; nil when StackID is nil
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
@@ -91,6 +92,7 @@ type WebhookResponse struct {
 	ServiceName string     `json:"service_name"`
 	Environment string     `json:"environment"`
 	StackID     *uuid.UUID `json:"stack_id,omitempty"`
+	StackName   *string    `json:"stack_name,omitempty"`
 	Enabled     bool       `json:"enabled"`
 	Secret      *string    `json:"secret,omitempty"` // Only on creation
 	WebhookURL  string     `json:"webhook_url"`
