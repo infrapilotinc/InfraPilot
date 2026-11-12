@@ -174,6 +174,7 @@ export interface ProxyHost {
   access_log: boolean;
   error_log: boolean;
   log_format?: string;
+  custom_config?: string;
   is_system_proxy: boolean;
   status: string;
   created_at: string;
@@ -3793,6 +3794,9 @@ export const api = {
       basic_auth_realm: string;
       basic_auth_excluded_paths: string[];
       bearer_auth_enabled: boolean;
+      access_log: boolean;
+      error_log: boolean;
+      custom_config: string;
       status: string;
     }>
   ) =>

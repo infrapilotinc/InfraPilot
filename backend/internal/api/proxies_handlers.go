@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -40,6 +41,7 @@ type ProxyHost struct {
 	AccessLog              bool     `json:"access_log"`
 	ErrorLog               bool     `json:"error_log"`
 	LogFormat              *string  `json:"log_format,omitempty"`
+	CustomConfig           string   `json:"custom_config"` // extra nginx directives placed in the serving server block(s)
 	ConfigHash             *string  `json:"config_hash,omitempty"`
 	Status           string     `json:"status"`
 	IsSystemProxy    bool       `json:"is_system_proxy"`
@@ -73,6 +75,7 @@ type CreateProxyRequest struct {
 	BasicAuthRealm   string  `json:"basic_auth_realm,omitempty"`
 	AccessLog        *bool   `json:"access_log,omitempty"`            // Enable access logging (default true)
 	ErrorLog         *bool   `json:"error_log,omitempty"`             // Enable error logging (default true)
+	CustomConfig     string  `json:"custom_config,omitempty"`         // Extra nginx directives (e.g. client_max_body_size 12m;)
 }
 
 // UpdateProxyRequest is the request body for updating a proxy host
@@ -91,6 +94,7 @@ type UpdateProxyRequest struct {
 	BearerAuthEnabled      *bool     `json:"bearer_auth_enabled,omitempty"`
 	AccessLog              *bool     `json:"access_log,omitempty"`
 	ErrorLog               *bool     `json:"error_log,omitempty"`
+	CustomConfig           *string   `json:"custom_config,omitempty"`
 	Status                 *string   `json:"status,omitempty"`
 }
 
@@ -136,7 +140,7 @@ func (h *Handler) listProxyHosts(c *gin.Context) {
 		       force_ssl, http2_enabled, include_www,
 		       COALESCE(basic_auth_enabled, false), COALESCE(basic_auth_realm, 'Restricted'),
 		       COALESCE(basic_auth_excluded_paths, '{}'),
-		       COALESCE(access_log, true), COALESCE(error_log, true), log_format,
+		       COALESCE(access_log, true), COALESCE(error_log, true), log_format, COALESCE(custom_config, ''),
 		       config_hash, status, is_system_proxy, created_at, updated_at
 		FROM proxy_hosts
 		WHERE agent_id = $1
@@ -157,7 +161,7 @@ func (h *Handler) listProxyHosts(c *gin.Context) {
 			&p.SSLEnabled, &p.SSLCertPath, &p.SSLKeyPath, &p.SSLExpiresAt,
 			&p.ForceSSL, &p.HTTP2Enabled, &p.IncludeWWW,
 			&p.BasicAuthEnabled, &p.BasicAuthRealm, &p.BasicAuthExcludedPaths,
-			&p.AccessLog, &p.ErrorLog, &p.LogFormat,
+			&p.AccessLog, &p.ErrorLog, &p.LogFormat, &p.CustomConfig,
 			&p.ConfigHash, &p.Status, &p.IsSystemProxy, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			continue
@@ -210,6 +214,11 @@ func (h *Handler) createProxyHost(c *gin.Context) {
 	// clue in the UI about why. Trim once here rather than at every later read site.
 	req.Domain = strings.TrimSpace(req.Domain)
 	req.UpstreamTarget = strings.TrimSpace(req.UpstreamTarget)
+	req.CustomConfig = strings.TrimSpace(req.CustomConfig)
+	if err := validateCustomNginxConfig(req.CustomConfig); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	req.RedirectURL = strings.TrimSpace(req.RedirectURL)
 	req.BasicAuthRealm = strings.TrimSpace(req.BasicAuthRealm)
 
@@ -294,12 +303,12 @@ func (h *Handler) createProxyHost(c *gin.Context) {
 	err = h.db.QueryRow(c.Request.Context(), `
 		INSERT INTO proxy_hosts (agent_id, domain, upstream_target, proxy_type, redirect_url, redirect_code,
 		                         force_ssl, http2_enabled, include_www, basic_auth_enabled, basic_auth_realm,
-		                         access_log, error_log, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'active')
+		                         access_log, error_log, custom_config, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'active')
 		RETURNING id
 	`, agentID, req.Domain, req.UpstreamTarget, req.ProxyType, redirectURL, redirectCode,
 		req.ForceSSL, req.HTTP2Enabled, req.IncludeWWW, req.BasicAuthEnabled, basicAuthRealm,
-		accessLog, errorLog).Scan(&proxyID)
+		accessLog, errorLog, req.CustomConfig).Scan(&proxyID)
 
 	if err != nil {
 		h.logger.Error("Failed to create proxy host")
@@ -332,7 +341,7 @@ func (h *Handler) createProxyHost(c *gin.Context) {
 		       ssl_enabled, ssl_cert_path, ssl_key_path, ssl_expires_at,
 		       force_ssl, http2_enabled, include_www,
 		       COALESCE(basic_auth_enabled, false), COALESCE(basic_auth_realm, 'Restricted'),
-		       COALESCE(access_log, true), COALESCE(error_log, true), log_format,
+		       COALESCE(access_log, true), COALESCE(error_log, true), log_format, COALESCE(custom_config, ''),
 		       config_hash, status, is_system_proxy, created_at, updated_at
 		FROM proxy_hosts
 		WHERE id = $1
@@ -342,7 +351,7 @@ func (h *Handler) createProxyHost(c *gin.Context) {
 		&proxy.SSLEnabled, &proxy.SSLCertPath, &proxy.SSLKeyPath, &proxy.SSLExpiresAt,
 		&proxy.ForceSSL, &proxy.HTTP2Enabled, &proxy.IncludeWWW,
 		&proxy.BasicAuthEnabled, &proxy.BasicAuthRealm,
-		&proxy.AccessLog, &proxy.ErrorLog, &proxy.LogFormat,
+		&proxy.AccessLog, &proxy.ErrorLog, &proxy.LogFormat, &proxy.CustomConfig,
 		&proxy.ConfigHash, &proxy.Status, &proxy.IsSystemProxy, &proxy.CreatedAt, &proxy.UpdatedAt,
 	)
 
@@ -390,7 +399,7 @@ func (h *Handler) getProxyHost(c *gin.Context) {
 		       ssl_enabled, ssl_cert_path, ssl_key_path, ssl_expires_at,
 		       force_ssl, http2_enabled, include_www,
 		       COALESCE(basic_auth_enabled, false), COALESCE(basic_auth_realm, 'Restricted'),
-		       COALESCE(access_log, true), COALESCE(error_log, true), log_format,
+		       COALESCE(access_log, true), COALESCE(error_log, true), log_format, COALESCE(custom_config, ''),
 		       config_hash, status, is_system_proxy, created_at, updated_at
 		FROM proxy_hosts
 		WHERE id = $1 AND agent_id = $2
@@ -400,7 +409,7 @@ func (h *Handler) getProxyHost(c *gin.Context) {
 		&proxy.SSLEnabled, &proxy.SSLCertPath, &proxy.SSLKeyPath, &proxy.SSLExpiresAt,
 		&proxy.ForceSSL, &proxy.HTTP2Enabled, &proxy.IncludeWWW,
 		&proxy.BasicAuthEnabled, &proxy.BasicAuthRealm,
-		&proxy.AccessLog, &proxy.ErrorLog, &proxy.LogFormat,
+		&proxy.AccessLog, &proxy.ErrorLog, &proxy.LogFormat, &proxy.CustomConfig,
 		&proxy.ConfigHash, &proxy.Status, &proxy.IsSystemProxy, &proxy.CreatedAt, &proxy.UpdatedAt,
 	)
 
@@ -461,6 +470,18 @@ func (h *Handler) updateProxyHost(c *gin.Context) {
 	if req.RedirectURL != nil {
 		trimmed := strings.TrimSpace(*req.RedirectURL)
 		req.RedirectURL = &trimmed
+	}
+	var previousCustomConfig string
+	if req.CustomConfig != nil {
+		trimmed := strings.TrimSpace(*req.CustomConfig)
+		req.CustomConfig = &trimmed
+		if err := validateCustomNginxConfig(trimmed); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		h.db.QueryRow(c.Request.Context(),
+			`SELECT COALESCE(custom_config, '') FROM proxy_hosts WHERE id = $1 AND agent_id = $2`, proxyID, agentID,
+		).Scan(&previousCustomConfig)
 	}
 	if req.BasicAuthRealm != nil {
 		trimmed := strings.TrimSpace(*req.BasicAuthRealm)
@@ -579,6 +600,11 @@ func (h *Handler) updateProxyHost(c *gin.Context) {
 		query += fmt.Sprintf(", error_log = $%d", argCount)
 		args = append(args, *req.ErrorLog)
 	}
+	if req.CustomConfig != nil {
+		argCount++
+		query += fmt.Sprintf(", custom_config = $%d", argCount)
+		args = append(args, *req.CustomConfig)
+	}
 	if req.Status != nil {
 		argCount++
 		query += fmt.Sprintf(", status = $%d", argCount)
@@ -616,7 +642,7 @@ func (h *Handler) updateProxyHost(c *gin.Context) {
 		       force_ssl, http2_enabled, include_www,
 		       COALESCE(basic_auth_enabled, false), COALESCE(basic_auth_realm, 'Restricted'),
 		       COALESCE(basic_auth_excluded_paths, '{}'), COALESCE(bearer_auth_enabled, false),
-		       COALESCE(access_log, true), COALESCE(error_log, true), log_format,
+		       COALESCE(access_log, true), COALESCE(error_log, true), log_format, COALESCE(custom_config, ''),
 		       config_hash, status, is_system_proxy, created_at, updated_at
 		FROM proxy_hosts
 		WHERE id = $1
@@ -626,9 +652,35 @@ func (h *Handler) updateProxyHost(c *gin.Context) {
 		&proxy.SSLEnabled, &proxy.SSLCertPath, &proxy.SSLKeyPath, &proxy.SSLExpiresAt,
 		&proxy.ForceSSL, &proxy.HTTP2Enabled, &proxy.IncludeWWW,
 		&proxy.BasicAuthEnabled, &proxy.BasicAuthRealm, &proxy.BasicAuthExcludedPaths, &proxy.BearerAuthEnabled,
-		&proxy.AccessLog, &proxy.ErrorLog, &proxy.LogFormat,
+		&proxy.AccessLog, &proxy.ErrorLog, &proxy.LogFormat, &proxy.CustomConfig,
 		&proxy.ConfigHash, &proxy.Status, &proxy.IsSystemProxy, &proxy.CreatedAt, &proxy.UpdatedAt,
 	)
+
+	// Custom directives are the one setting nginx can reject, so apply those synchronously:
+	// on a failed `nginx -t` the agent restores the previous file, and we restore the
+	// previous value here so the DB keeps matching what's live.
+	if req.CustomConfig != nil && err == nil && *req.CustomConfig != previousCustomConfig {
+		if applyErr := h.applyProxyConfigSync(c.Request.Context(), agentID, proxyID, proxy.Domain, proxy.UpstreamTarget,
+			proxy.ProxyType, proxy.RedirectURL, &proxy.RedirectCode, proxy.ForceSSL, proxy.HTTP2Enabled, proxy.IncludeWWW, proxy.SSLEnabled); applyErr != nil {
+			var nginxErr *nginxRejectedError
+			if errors.As(applyErr, &nginxErr) {
+				h.db.Exec(c.Request.Context(), `UPDATE proxy_hosts SET custom_config = $1 WHERE id = $2`, previousCustomConfig, proxyID)
+				// The rest of this update was saved; apply it with the previous custom config.
+				go h.dispatchProxyConfigFull(context.Background(), agentID, proxyID, proxy.Domain, proxy.UpstreamTarget,
+					proxy.ProxyType, proxy.RedirectURL, &proxy.RedirectCode, proxy.ForceSSL, proxy.HTTP2Enabled, proxy.IncludeWWW, proxy.SSLEnabled)
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": "nginx rejected the custom configuration, so it was not saved (the previous configuration is still live): " + nginxErr.Message,
+				})
+				return
+			}
+			h.logger.Warn("Custom proxy config saved but not applied", zap.Error(applyErr), zap.String("domain", proxy.Domain))
+		}
+		if req.BasicAuthEnabled != nil || req.BasicAuthRealm != nil || req.BasicAuthExcludedPaths != nil {
+			go h.dispatchHtpasswd(context.Background(), agentID, proxyID)
+		}
+		c.JSON(http.StatusOK, proxy)
+		return
+	}
 
 	// Push updated config to agent via gRPC
 	go h.dispatchProxyConfigFull(context.Background(), agentID, proxyID, proxy.Domain, proxy.UpstreamTarget,
@@ -912,7 +964,7 @@ func (h *Handler) getProxyConfig(c *gin.Context) {
 		SELECT id, agent_id, domain, upstream_target, ssl_enabled, ssl_cert_path,
 		       ssl_key_path, ssl_expires_at, force_ssl, http2_enabled, include_www,
 		       COALESCE(basic_auth_enabled, false), COALESCE(basic_auth_realm, 'Restricted'),
-		       COALESCE(bearer_auth_enabled, false),
+		       COALESCE(bearer_auth_enabled, false), COALESCE(custom_config, ''),
 		       config_hash, status, created_at, updated_at
 		FROM proxy_hosts
 		WHERE id = $1 AND agent_id = $2
@@ -920,7 +972,7 @@ func (h *Handler) getProxyConfig(c *gin.Context) {
 		&proxy.ID, &proxy.AgentID, &proxy.Domain, &proxy.UpstreamTarget, &proxy.SSLEnabled,
 		&proxy.SSLCertPath, &proxy.SSLKeyPath, &proxy.SSLExpiresAt, &proxy.ForceSSL,
 		&proxy.HTTP2Enabled, &proxy.IncludeWWW, &proxy.BasicAuthEnabled, &proxy.BasicAuthRealm,
-		&proxy.BearerAuthEnabled,
+		&proxy.BearerAuthEnabled, &proxy.CustomConfig,
 		&proxy.ConfigHash, &proxy.Status, &proxy.CreatedAt, &proxy.UpdatedAt,
 	)
 
@@ -1041,6 +1093,7 @@ type ConfigPreviewRequest struct {
 	XContentTypeOptions bool `json:"x_content_type_options"`
 	XXSSProtection   bool    `json:"x_xss_protection"`
 	ContentSecurityPolicy *string `json:"content_security_policy,omitempty"`
+	CustomConfig     string  `json:"custom_config"`
 }
 
 // previewProxyConfig generates nginx config from form values without saving
@@ -1086,6 +1139,11 @@ func (h *Handler) previewProxyConfig(c *gin.Context) {
 	// its own trim rather than inheriting one applied elsewhere.
 	req.Domain = strings.TrimSpace(req.Domain)
 	req.UpstreamTarget = strings.TrimSpace(req.UpstreamTarget)
+	req.CustomConfig = strings.TrimSpace(req.CustomConfig)
+	if err := validateCustomNginxConfig(req.CustomConfig); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	// Set default values
 	if req.BasicAuthRealm == "" {
@@ -1106,6 +1164,7 @@ func (h *Handler) previewProxyConfig(c *gin.Context) {
 		BasicAuthEnabled:  req.BasicAuthEnabled,
 		BasicAuthRealm:    req.BasicAuthRealm,
 		BearerAuthEnabled: req.BearerAuthEnabled,
+		CustomConfig:      req.CustomConfig,
 	}
 
 	// A certificate pinned from the proxy panel isn't part of this form, so keep it.
@@ -1370,6 +1429,7 @@ func generateNginxConfig(proxy ProxyHost, headers SecurityHeaders, bearerTokens 
 			config += "    root /var/www/html;\n"
 			config += "    error_page 502 503 504 /502.html;\n"
 			config += "    location = /502.html { internal; }\n\n"
+			config += generateCustomConfigBlock(proxy.CustomConfig)
 			config += generateLocationBlockWithAuth(proxy.UpstreamTarget, proxy.BasicAuthEnabled, proxy.BasicAuthRealm, proxy.Domain, proxy.BasicAuthExcludedPaths, proxy.BearerAuthEnabled, bearerTokens)
 		}
 		config += "}\n\n"
@@ -1422,12 +1482,85 @@ func generateNginxConfig(proxy ProxyHost, headers SecurityHeaders, bearerTokens 
 			config += "    root /var/www/html;\n"
 			config += "    error_page 502 503 504 /502.html;\n"
 			config += "    location = /502.html { internal; }\n\n"
+			config += generateCustomConfigBlock(proxy.CustomConfig)
 			config += generateLocationBlockWithAuth(proxy.UpstreamTarget, proxy.BasicAuthEnabled, proxy.BasicAuthRealm, proxy.Domain, proxy.BasicAuthExcludedPaths, proxy.BearerAuthEnabled, bearerTokens)
 		}
 		config += "}\n"
 	}
 
 	return config
+}
+
+// maxCustomNginxConfigLen caps the custom directives a proxy host can carry.
+const maxCustomNginxConfigLen = 16 * 1024
+
+// validateCustomNginxConfig rejects custom directives that would break out of the server
+// block they're placed in. nginx itself (`nginx -t` on the agent) checks the rest.
+func validateCustomNginxConfig(cfg string) error {
+	if len(cfg) > maxCustomNginxConfigLen {
+		return fmt.Errorf("custom config is too long (max %d bytes)", maxCustomNginxConfigLen)
+	}
+	if strings.ContainsRune(cfg, 0) {
+		return fmt.Errorf("custom config contains a NUL byte")
+	}
+	depth := 0
+	inQuote := rune(0)
+	escaped := false
+	inComment := false
+	for _, r := range cfg {
+		switch {
+		case inComment:
+			if r == '\n' {
+				inComment = false
+			}
+		case escaped:
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case inQuote != 0:
+			if r == inQuote {
+				inQuote = 0
+			}
+		case r == '"' || r == '\'':
+			inQuote = r
+		case r == '#':
+			inComment = true
+		case r == '{':
+			depth++
+		case r == '}':
+			depth--
+			if depth < 0 {
+				return fmt.Errorf("custom config has an unmatched '}'")
+			}
+		}
+	}
+	if inQuote != 0 {
+		return fmt.Errorf("custom config has an unterminated quote")
+	}
+	if depth != 0 {
+		return fmt.Errorf("custom config has an unclosed '{'")
+	}
+	return nil
+}
+
+// generateCustomConfigBlock indents a proxy host's custom directives into a server block.
+func generateCustomConfigBlock(cfg string) string {
+	cfg = strings.TrimSpace(cfg)
+	if cfg == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("    # Custom configuration\n")
+	for _, line := range strings.Split(cfg, "\n") {
+		line = strings.TrimRight(line, " \t\r")
+		if line == "" {
+			b.WriteString("\n")
+			continue
+		}
+		b.WriteString("    " + line + "\n")
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // generateRedirectLocationBlock creates a location block that redirects to an external URL
@@ -1712,6 +1845,55 @@ func (h *Handler) dispatchProxyConfigFull(ctx context.Context, agentID, proxyID 
 		return
 	}
 
+	cmd := h.buildProxyConfigCommand(ctx, proxyID, domain, upstream, proxyType, redirectURL, redirectCode, forceSSL, http2, includeWWW, sslEnabled)
+
+	// Send command (non-blocking)
+	if err := agentgrpc.SendCommandAsync(agentIDStr, cmd); err != nil {
+		h.logger.Error("Failed to dispatch proxy config",
+			zap.Error(err),
+			zap.String("domain", domain),
+		)
+		return
+	}
+
+	h.logger.Info("Dispatched proxy config to agent",
+		zap.String("agent_id", agentIDStr),
+		zap.String("domain", domain),
+		zap.String("proxy_type", proxyType),
+	)
+}
+
+// nginxRejectedError means the agent wrote the config but `nginx -t` (or the reload)
+// failed; the agent has already restored the previous file.
+type nginxRejectedError struct{ Message string }
+
+func (e *nginxRejectedError) Error() string { return e.Message }
+
+// applyProxyConfigSync is dispatchProxyConfigFull, but waits for the agent's result so the
+// caller can surface an nginx rejection to the user.
+func (h *Handler) applyProxyConfigSync(ctx context.Context, agentID, proxyID uuid.UUID, domain, upstream, proxyType string, redirectURL *string, redirectCode *int, forceSSL, http2, includeWWW, sslEnabled bool) error {
+	agentIDStr := agentID.String()
+	if !agentgrpc.IsAgentConnected(agentIDStr) {
+		return fmt.Errorf("agent not connected")
+	}
+	cmd := h.buildProxyConfigCommand(ctx, proxyID, domain, upstream, proxyType, redirectURL, redirectCode, forceSSL, http2, includeWWW, sslEnabled)
+	resp, err := agentgrpc.SendCommand(agentIDStr, cmd, 30*time.Second)
+	if err != nil {
+		return err
+	}
+	result, err := resp.GetCommandResult()
+	if err != nil || result == nil {
+		return fmt.Errorf("unexpected agent response")
+	}
+	if !result.Success {
+		return &nginxRejectedError{Message: result.Message}
+	}
+	return nil
+}
+
+// buildProxyConfigCommand renders a proxy host's full nginx config and wraps it in the
+// agent write_config command.
+func (h *Handler) buildProxyConfigCommand(ctx context.Context, proxyID uuid.UUID, domain, upstream, proxyType string, redirectURL *string, redirectCode *int, forceSSL, http2, includeWWW, sslEnabled bool) *agentgrpc.BackendMessage {
 	// Fetch security headers for complete config
 	var headers SecurityHeaders
 	h.db.QueryRow(ctx, `
@@ -1730,12 +1912,13 @@ func (h *Handler) dispatchProxyConfigFull(ctx context.Context, agentID, proxyID 
 	var basicAuthRealm string
 	var basicAuthExcludedPaths []string
 	var sslCertPath, sslKeyPath *string
+	var customConfig string
 	h.db.QueryRow(ctx, `
 		SELECT COALESCE(basic_auth_enabled, false), COALESCE(basic_auth_realm, 'Restricted'),
 		       COALESCE(basic_auth_excluded_paths, '{}'), COALESCE(bearer_auth_enabled, false),
-		       ssl_cert_path, ssl_key_path
+		       ssl_cert_path, ssl_key_path, COALESCE(custom_config, '')
 		FROM proxy_hosts WHERE id = $1
-	`, proxyID).Scan(&basicAuthEnabled, &basicAuthRealm, &basicAuthExcludedPaths, &bearerAuthEnabled, &sslCertPath, &sslKeyPath)
+	`, proxyID).Scan(&basicAuthEnabled, &basicAuthRealm, &basicAuthExcludedPaths, &bearerAuthEnabled, &sslCertPath, &sslKeyPath, &customConfig)
 
 	bearerTokens, err := h.decryptBearerTokens(ctx, proxyID)
 	if err != nil {
@@ -1770,6 +1953,7 @@ func (h *Handler) dispatchProxyConfigFull(ctx context.Context, agentID, proxyID 
 		BearerAuthEnabled:      bearerAuthEnabled,
 		SSLCertPath:            sslCertPath,
 		SSLKeyPath:             sslKeyPath,
+		CustomConfig:           customConfig,
 	}
 
 	// Generate nginx config
@@ -1785,26 +1969,11 @@ func (h *Handler) dispatchProxyConfigFull(ctx context.Context, agentID, proxyID 
 		ConfigPath:    configPath,
 	})
 
-	cmd := &agentgrpc.BackendMessage{
+	return &agentgrpc.BackendMessage{
 		RequestId: uuid.New().String(),
 		Type:      "nginx",
 		Command:   cmdPayload,
 	}
-
-	// Send command (non-blocking)
-	if err := agentgrpc.SendCommandAsync(agentIDStr, cmd); err != nil {
-		h.logger.Error("Failed to dispatch proxy config",
-			zap.Error(err),
-			zap.String("domain", domain),
-		)
-		return
-	}
-
-	h.logger.Info("Dispatched proxy config to agent",
-		zap.String("agent_id", agentIDStr),
-		zap.String("domain", domain),
-		zap.String("proxy_type", proxyType),
-	)
 }
 
 // redispatchProxyConfig re-reads a proxy's own settings from the DB and regenerates/

@@ -693,6 +693,10 @@ func (h *CommandHandler) handleNginxCommand(ctx context.Context, cmd *agentgrpc.
 				Message: "cannot write config: proxy is in external mode",
 			}
 		}
+		// Keep the current file so a config nginx rejects can be rolled back; leaving it in
+		// place would fail `nginx -t` for every later reload, for every host.
+		previous, readErr := os.ReadFile(nginxCmd.ConfigPath)
+		hadPrevious := readErr == nil
 		// Write config file
 		if err := h.nginx.WriteConfigFile(nginxCmd.ConfigPath, nginxCmd.ConfigContent); err != nil {
 			return &agentgrpc.CommandResult{
@@ -702,6 +706,13 @@ func (h *CommandHandler) handleNginxCommand(ctx context.Context, cmd *agentgrpc.
 		}
 		// Test config
 		if err := h.nginx.TestConfig(ctx); err != nil {
+			if hadPrevious {
+				if rbErr := h.nginx.WriteConfigFile(nginxCmd.ConfigPath, string(previous)); rbErr != nil {
+					h.logger.Error("Failed to restore previous nginx config", zap.Error(rbErr), zap.String("path", nginxCmd.ConfigPath))
+				}
+			} else {
+				os.Remove(nginxCmd.ConfigPath)
+			}
 			return &agentgrpc.CommandResult{
 				Success: false,
 				Message: fmt.Sprintf("config test failed: %v", err),

@@ -20,6 +20,7 @@ import {
   Play,
   Save,
   Copy,
+  Code,
 } from "lucide-react";
 import { api, ProxyHost, SecurityHeaders, RateLimit } from "@/lib/api";
 import { useTraffic, getSSLStatus, getProxyStatus } from "@/lib/traffic-context";
@@ -70,7 +71,9 @@ export function ProxyPanel() {
     access_log: true,
     error_log: true,
     bearer_auth_enabled: false,
+    custom_config: "",
   });
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Auth users state
   const [authUsers, setAuthUsers] = useState<{ id: string; username: string }[]>([]);
@@ -166,7 +169,9 @@ export function ProxyPanel() {
         access_log: proxy.access_log ?? true,
         error_log: proxy.error_log ?? true,
         bearer_auth_enabled: proxy.bearer_auth_enabled ?? false,
+        custom_config: proxy.custom_config ?? "",
       });
+      setSaveError(null);
       setJustCreatedToken("");
 
       // Load auth users
@@ -326,6 +331,7 @@ export function ProxyPanel() {
   const handleSaveAll = async () => {
     if (!proxy || !selectedAgent) return;
 
+    setSaveError(null);
     try {
       // Update proxy settings
       await updateMutation.mutateAsync({ proxyId: proxy.id, data: editProxy });
@@ -336,6 +342,7 @@ export function ProxyPanel() {
       setHasChanges(false);
     } catch (error) {
       console.error("Failed to save changes:", error);
+      setSaveError(error instanceof Error ? error.message : "Failed to save changes");
     }
   };
 
@@ -939,6 +946,31 @@ export function ProxyPanel() {
               </div>
             </Section>
 
+            {/* Advanced: custom nginx directives */}
+            <Section
+              title="Advanced"
+              icon={Code}
+              defaultOpen={!!editProxy.custom_config}
+              badge={editProxy.custom_config ? <Badge size="sm">Custom</Badge> : undefined}
+            >
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Custom Nginx Configuration</label>
+                <textarea
+                  value={editProxy.custom_config}
+                  onChange={(e) => { setEditProxy({ ...editProxy, custom_config: e.target.value }); markChanged(); }}
+                  placeholder={"client_max_body_size 12m;\nproxy_read_timeout 300s;"}
+                  rows={6}
+                  spellCheck={false}
+                  className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-mono"
+                />
+                <p className="text-xs text-gray-500">
+                  Added to this host&apos;s server block (the HTTPS one when SSL is forced) and kept when the
+                  config is regenerated. Checked with <code className="font-mono">nginx -t</code> on save; if nginx
+                  rejects it, nothing changes on the server.
+                </p>
+              </div>
+            </Section>
+
             {/* Nginx Configuration Preview - Using shared component */}
             <ConfigPreviewSection
               config={configData?.config}
@@ -979,6 +1011,15 @@ export function ProxyPanel() {
                 </Button>
               </div>
             </div>
+
+            {saveError && (
+              <div className="p-3 rounded-lg text-sm bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span className="whitespace-pre-wrap break-words font-mono text-xs">{saveError}</span>
+                </div>
+              </div>
+            )}
 
             {/* Test config result */}
             {(testConfigMutation.isSuccess || testConfigMutation.isError) && (
