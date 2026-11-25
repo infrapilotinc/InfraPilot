@@ -4448,6 +4448,18 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ key }),
     }),
+  // Post-setup free Community key: email a 6-digit code, then verify it. Unlocks the
+  // connected features (alert channels). super_admin only.
+  connectAccount: (email: string) =>
+    fetchAPI<{ status: string }>("/settings/license/connect", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  connectAccountVerify: (email: string, code: string) =>
+    fetchAPI<CommunitySignupVerifyResponse>("/settings/license/connect/verify", {
+      method: "POST",
+      body: JSON.stringify({ email, code }),
+    }),
   // Outcome recorded by the CE→EE switch helper; polled across the restart.
   getUpgradeStatus: () =>
     fetchAPI<UpgradeStatus>("/settings/license/upgrade/status"),

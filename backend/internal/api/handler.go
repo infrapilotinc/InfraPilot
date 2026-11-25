@@ -342,6 +342,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 				// License key management
 				settings.GET("/license", h.getLicenseSettings)
 				settings.PUT("/license", h.updateLicenseKey)
+				settings.POST("/license/connect", h.connectAccount)
+				settings.POST("/license/connect/verify", h.connectAccountVerify)
 
 				// Live CE→EE upgrade (SSE progress + auto-revert). CE only.
 				settings.GET("/license/upgrade", h.upgradeToEnterprise)

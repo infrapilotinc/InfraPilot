@@ -11,7 +11,7 @@ import (
 func TestLicenseConfiguredFalseForCommunityMode(t *testing.T) {
 	h := &Handler{license: license.NewCommunityModeClient(zap.NewNop())}
 	if h.licenseConfigured() {
-		t.Fatal("community-mode sentinel key should not count as configured — this is exactly the case createInitialAdmin must reject")
+		t.Fatal("community-mode sentinel key should not count as configured (keyless CE)")
 	}
 }
 

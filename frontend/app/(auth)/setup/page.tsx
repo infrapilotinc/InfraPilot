@@ -18,9 +18,10 @@ export default function SetupPage() {
   const { setTokens } = useAuthStore();
 
   const [ready, setReady] = useState(false);
-  // A license is required to complete setup (v3/36), and the setup token is required
-  // before anything else on this page can run at all -- so the wizard is now three
-  // steps, always in order: token, license, admin account.
+  // The setup token is required before anything else on this page can run. After it,
+  // the wizard goes straight to the admin account: no license is needed to finish
+  // setup (v3/36, 2026-11-25). Step 2 (license) is an optional detour for people who
+  // already have a key; the free key is otherwise offered when adding an alert channel.
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
   // Step 1: setup token — closes the "whoever visits /setup first becomes admin" race.
@@ -81,7 +82,7 @@ export default function SetupPage() {
     try {
       await api.verifySetupToken(tokenInput.trim());
       setSetupToken(tokenInput.trim());
-      setStep(2);
+      setStep(3);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Invalid setup token";
       setTokenError(message);
@@ -195,7 +196,7 @@ export default function SetupPage() {
 
   const stepTitles: Record<1 | 2 | 3, string> = {
     1: "Enter the setup token from your console",
-    2: "Activate a free Community key to get started",
+    2: "Activate a license key (optional)",
     3: "Create your admin account",
   };
 
@@ -248,9 +249,16 @@ export default function SetupPage() {
             </form>
           )}
 
-          {/* Step 2: License */}
+          {/* Step 2: License (optional) */}
           {step === 2 && (
             <div className="space-y-5">
+              <button
+                type="button"
+                onClick={() => setStep(3)}
+                className="text-sm text-primary-600 dark:text-primary-400 hover:underline"
+              >
+                ← Skip, continue without a key
+              </button>
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -437,6 +445,25 @@ export default function SetupPage() {
               <button type="submit" disabled={adminLoading} className={buttonClass}>
                 {adminLoading ? "Creating Account..." : "Create Admin Account →"}
               </button>
+
+              {/* Only offered before a key exists; status.license_configured lands on
+                  this step with a key already active. Needs the setup token, which a
+                  refresh drops, so hide it without one. */}
+              {setupToken && (
+                <p className="text-center text-sm text-gray-600 dark:text-gray-400">
+                  Have a license key?{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLicenseMode("paste");
+                      setStep(2);
+                    }}
+                    className="text-primary-600 dark:text-primary-400 hover:underline"
+                  >
+                    Activate it
+                  </button>
+                </p>
+              )}
 
               {/* First-run telemetry disclosure (v3/40 §2 privacy contract) */}
               <p className="text-center text-xs text-gray-500 dark:text-gray-400">

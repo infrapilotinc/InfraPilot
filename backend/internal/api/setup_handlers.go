@@ -281,8 +281,8 @@ type CommunitySignupRequest struct {
 }
 
 // communitySignup kicks off the in-app "get a free key" path: asks infrapilot.org to
-// create/link an account for this email and email a 6-digit code, so a license (now
-// required to complete setup, v3/36) can be obtained without leaving this page. The
+// create/link an account for this email and email a 6-digit code, so a free license
+// can be obtained without leaving this page (optional at setup since v3/36 2026-11-25). The
 // frontend collects the code from the user and calls communitySignupVerify with it --
 // no polling.
 func (h *Handler) communitySignup(c *gin.Context) {
@@ -299,6 +299,13 @@ func (h *Handler) communitySignup(c *gin.Context) {
 		return
 	}
 
+	h.sendCommunitySignupCode(c, req.Email)
+}
+
+// sendCommunitySignupCode asks infrapilot.org to email a 6-digit code for a free
+// Community key and writes the response. Shared by the setup wizard and the
+// post-setup connect flow.
+func (h *Handler) sendCommunitySignupCode(c *gin.Context, email string) {
 	instanceID, err := license.GetInstanceID(h.cfg.DataDir)
 	if err != nil {
 		h.logger.Error("Failed to get instance ID for community signup", zap.Error(err))
@@ -306,7 +313,7 @@ func (h *Handler) communitySignup(c *gin.Context) {
 		return
 	}
 
-	if err := license.RequestCommunitySignup(req.Email, instanceID, h.version); err != nil {
+	if err := license.RequestCommunitySignup(email, instanceID, h.version); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -339,6 +346,12 @@ func (h *Handler) communitySignupVerify(c *gin.Context) {
 		return
 	}
 
+	h.verifyCommunitySignupCode(c, req.Email, req.Code)
+}
+
+// verifyCommunitySignupCode checks the emailed code, persists the issued free key and
+// writes the response. Shared by the setup wizard and the post-setup connect flow.
+func (h *Handler) verifyCommunitySignupCode(c *gin.Context, email, code string) {
 	instanceID, err := license.GetInstanceID(h.cfg.DataDir)
 	if err != nil {
 		h.logger.Error("Failed to get instance ID for community signup verify", zap.Error(err))
@@ -346,7 +359,7 @@ func (h *Handler) communitySignupVerify(c *gin.Context) {
 		return
 	}
 
-	status, err := license.VerifyCommunitySignupOTP(req.Email, req.Code, instanceID, h.version)
+	status, err := license.VerifyCommunitySignupOTP(email, code, instanceID, h.version)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -396,14 +409,9 @@ func (h *Handler) createInitialAdmin(c *gin.Context) {
 		return
 	}
 
-	// A license (free Community or paid) is now required to complete setup (v3/36
-	// reversal — the free key had no functional teeth and wasn't driving signups, so
-	// requiring it here is the lever, not a feature gate). Activate one via setupLicense
-	// or communitySignupVerify before this succeeds.
-	if !h.licenseConfigured() {
-		c.JSON(http.StatusForbidden, gin.H{"error": "a Community or Enterprise license is required to complete setup — activate one first"})
-		return
-	}
+	// No license is needed to finish setup: keyless CE is the full single-node platform
+	// (v3/36, 2026-11-25). The free key is asked for later, when the user adds an alert
+	// channel (see requireConnectedFeature), where it actually gives them something.
 
 	// Validate password strength
 	if len(req.Password) < 8 {

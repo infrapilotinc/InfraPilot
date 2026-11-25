@@ -111,7 +111,7 @@ InfraPilot CE is a self-hosted control plane for small teams running Dockerized 
 | Rust agent (mTLS enrollment) | ❌ | ✅ |
 | Priority support | ❌ | ✅ |
 
-> CE is AGPL-3.0 licensed and free forever. EE requires a license key — contact **sales@infrapilot.org**.
+> CE is AGPL-3.0 licensed and free forever, and needs no license key to install or use. Alert channels (email, Slack, Discord, Teams, webhooks) need a free account, which you can connect from inside the app with just an email. EE requires a license key — contact **sales@infrapilot.org**.
 
 
 ## CE Limitations

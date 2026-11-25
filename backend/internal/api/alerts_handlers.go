@@ -154,6 +154,9 @@ func (h *Handler) createAlertChannelReal(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel_type, must be smtp, slack, or webhook"})
 		return
 	}
+	if !h.requireConnectedFeature(c, connectedFeatureForChannel(req.ChannelType)) {
+		return
+	}
 
 	enabled := true
 	if req.Enabled != nil {
